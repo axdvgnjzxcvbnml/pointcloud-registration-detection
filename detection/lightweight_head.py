@@ -28,6 +28,8 @@ import logging
 import torch
 import torch.nn as nn
 
+from fusion_head import count_parameters
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,11 +142,6 @@ def build_lightweight_heads(fusion_mode="concat", pc_dim=128, img_dim=128,
         fusion_mode, pc_dim, img_dim, hidden_dim, num_heads, dropout)
     det_head = LightweightDetectionHead(hidden_dim, num_classes, vote_num, dropout)
     return fusion_head, det_head
-
-
-def count_parameters(module):
-    """统计可训练参数量（单位：百万）。"""
-    return sum(p.numel() for p in module.parameters() if p.requires_grad) / 1e6
 
 
 def main():

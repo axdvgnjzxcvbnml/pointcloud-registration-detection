@@ -98,8 +98,10 @@ def finetune_lightweight(cfg, resume_ckpt, det_data_dir, frames_dir,
 
     torch.manual_seed(cfg.get("seed", 2024))
 
+    use_image_branch = cfg.get("ablation", {}).get("use_image_branch", True)
     train_ds = SunRGBDDataset(det_data_dir, frames_dir,
-                              sample_names=[s["name"] for s in split["train"]])
+                              sample_names=[s["name"] for s in split["train"]],
+                              use_image_branch=use_image_branch)
     train_loader = DataLoader(train_ds, batch_size=train_cfg["batch_size"],
                               shuffle=True, num_workers=train_cfg["num_workers"])
 
