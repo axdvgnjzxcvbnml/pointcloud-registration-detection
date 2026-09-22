@@ -14,6 +14,7 @@ CPU 上无法实例化 —— 自检用 MockVoteNetBackbone（MLP）替换，仅
 "融合头 + 投影 + 检测头 + 训练循环" 的装配与形状正确性；
 真实 VoteNet 主干在 V100 上由 v100_step1 编译后生效。
 """
+import copy
 import json
 import logging
 import sys
