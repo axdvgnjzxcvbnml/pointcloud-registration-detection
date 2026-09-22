@@ -89,10 +89,11 @@ class YOLOv8FeatureExtractor:
         self.image_size = image_size
         self.p3_layer_index = p3_layer_index
 
-        # ultralytics 的 YOLO(ckpt).model 即 nn.Sequential 网络体
-        self.backbone = YOLO(ckpt).model
+        # ultralytics 的 YOLO(ckpt).model 是 DetectionModel，
+        # 其 .model 属性才是 nn.Sequential 网络体（8.2.x 已验证）。
+        self.backbone = YOLO(ckpt).model.model
         if not isinstance(self.backbone, nn.Sequential):
-            raise TypeError("YOLO(ckpt).model 不是 nn.Sequential，请检查 ultralytics 版本")
+            raise TypeError("YOLO(ckpt).model.model 不是 nn.Sequential，请检查 ultralytics 版本")
 
         # P3 层通道数（YOLOv8n 为 64；若自定义结构请调整）
         self.p3_channels = 64
@@ -109,8 +110,15 @@ class YOLOv8FeatureExtractor:
         n = len(self.backbone)
         if not (0 <= self.p3_layer_index < n):
             raise IndexError(f"p3_layer_index={self.p3_layer_index} 越界（共 {n} 层）")
-        logger.info("P3 层: model.model[%d] = %s",
-                    self.p3_layer_index, type(self.backbone[self.p3_layer_index]).__name__)
+        if hasattr(self.backbone[self.p3_layer_index], "f"):
+            logger.info("P3 层: model.model[%d] = %s（from=%s）",
+                        self.p3_layer_index,
+                        type(self.backbone[self.p3_layer_index]).__name__,
+                        self.backbone[self.p3_layer_index].f)
+        else:
+            logger.info("P3 层: model.model[%d] = %s",
+                        self.p3_layer_index,
+                        type(self.backbone[self.p3_layer_index]).__name__)
 
     def freeze_backbone(self):
         """冻结主干与 Neck（含 P3 之前全部参数）。"""
@@ -135,11 +143,22 @@ class YOLOv8FeatureExtractor:
             raise TypeError("img 应为 torch.Tensor，请先调用 preprocess_image")
 
         self.backbone.eval()
+        # 仿照 ultralytics 官方 _predict_once 的跳连逻辑（m.f 索引），
+        # 只跑到 P3 层（跳过 Detect 头，省显存、避免干扰）。
+        # 注意：YOLOv8 的 neck 含多输入 Concat（f=[-1, k]），
+        # 不能简单地逐层 x = layer(x)，必须维护历史输出 y。
+        y = []
         x = img
-        # 只跑到 P3 层（跳过 Detect 头，省显存、避免干扰）
-        for layer in self.backbone[:self.p3_layer_index + 1]:
+        for i, m in enumerate(self.backbone):
+            if i > self.p3_layer_index:
+                break
+            if getattr(m, "f", -1) != -1:
+                mf = m.f
+                x = y[mf] if isinstance(mf, int) else \
+                    [x if j == -1 else y[j] for j in mf]
             with torch.no_grad():
-                x = layer(x)
+                x = m(x)
+            y.append(x)
         return self.proj_conv(x)
 
     def __call__(self, img):
