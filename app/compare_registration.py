@@ -35,6 +35,10 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+# app 内公共渲染兼容层（0.17/0.19 相机 API 差异）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_compat import (make_offscreen_renderer, setup_camera as setup_camera_compat,
+                           orbit_eye, scene_center_radius)
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger("compare_registration")
@@ -87,15 +91,16 @@ def run_registration_pipeline(source_pcd, target_pcd, voxel_size=0.02):
     """
     from registration.preprocess_pointcloud import preprocess_pointcloud
     from registration.coarse_registration import coarse_registration
-    from registration.fine_registration import fine_registration
+    from registration.fine_registration import improved_icp
 
     src = preprocess_pointcloud(source_pcd, voxel_size=voxel_size,
-                                nb_neighbors=20, std_ratio=2.0, radius_normal=0.1)
+                                nb_neighbors=20, std_ratio=2.0, normal_radius=0.1)
     tgt = preprocess_pointcloud(target_pcd, voxel_size=voxel_size,
-                                nb_neighbors=20, std_ratio=2.0, radius_normal=0.1)
+                                nb_neighbors=20, std_ratio=2.0, normal_radius=0.1)
     T_coarse, _ = coarse_registration(src, tgt, voxel_size=voxel_size)
-    T_fine, info = fine_registration(src, tgt, T_coarse, voxel_size=voxel_size)
-    log.info("配准完成：RMSE=%.4f, fitness=%.4f", info["rmse"], info["fitness"])
+    T_fine, history = improved_icp(src, tgt, init_transformation=T_coarse)
+    log.info("配准完成：迭代 %d 次，RMSE=%.4f, fitness=%.4f",
+             len(history), history[-1]["inlier_rmse"], history[-1]["fitness"])
     return T_fine
 
 
@@ -121,24 +126,16 @@ def build_comparison_geometries(source_pcd, target_pcd, T):
 
 def _scene_camera(pcds, fov=60.0, elevation=25.0, azimuth=0.0, dist_scale=1.5):
     """由点云集合计算观察相机（center/eye/up），左右两半共用。"""
-    pts = np.concatenate([np.asarray(p.points) for p in pcds], axis=0)
-    center = pts.mean(axis=0)
-    radius = float(np.linalg.norm(pts - center, axis=1).max())
-    if radius <= 1e-9:
-        radius = 1.0
+    center, radius = scene_center_radius(pcds)
     dist = radius * dist_scale
-    eye = np.array([
-        center[0] + dist * np.cos(np.deg2rad(elevation)) * np.sin(np.deg2rad(azimuth)),
-        center[1] + dist * np.cos(np.deg2rad(elevation)) * np.cos(np.deg2rad(azimuth)),
-        center[2] + dist * np.sin(np.deg2rad(elevation)),
-    ])
+    eye = orbit_eye(center, dist, elevation, azimuth)
     return {"center": center, "eye": eye, "up": np.array([0.0, 0.0, 1.0])}
 
 
-def render_offscreen(pcds, out_path, camera, width=1280, height=720, fov=60.0,
+def render_offscreen(pcds, camera, width=1280, height=720, fov=60.0,
                      point_size=2.0):
-    """渲染一组点云为 PNG（离屏）。"""
-    renderer = rendering.OffscreenRenderer(width, height, headless=True)
+    """渲染一组点云，直接返回 PIL.Image（全程内存，不落临时文件）。"""
+    renderer = make_offscreen_renderer(width, height)
     renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
     mat = rendering.MaterialRecord()
     mat.shader = "defaultUnlit"
@@ -146,23 +143,16 @@ def render_offscreen(pcds, out_path, camera, width=1280, height=720, fov=60.0,
     mat.point_size = point_size
     for i, pcd in enumerate(pcds):
         renderer.scene.add_geometry(f"g_{i}", pcd, mat)
-    renderer.scene.setup_camera(fov, camera["center"], camera["eye"], camera["up"])
-    img = renderer.render_to_image()
-    o3d.io.write_image(str(out_path), img)
+    setup_camera_compat(renderer, fov, camera["center"], camera["eye"], camera["up"])
+    return Image.fromarray(np.asarray(renderer.render_to_image()))
 
 
 def render_side_by_side(left, right, out_path, camera,
                         width=1280, height=720, fov=60.0, point_size=2.0):
-    """左右两半各渲染一次（同一相机），横向拼接成一张对比图。"""
-    import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="reg_compare_"))
-    l_path = tmp / "left.png"
-    r_path = tmp / "right.png"
-    render_offscreen(left, l_path, camera, width, height, fov, point_size)
-    render_offscreen(right, r_path, camera, width, height, fov, point_size)
+    """左右两半各渲染一次（同一相机），内存中横向拼接成一张对比图。"""
+    l_img = render_offscreen(left, camera, width, height, fov, point_size)
+    r_img = render_offscreen(right, camera, width, height, fov, point_size)
 
-    l_img = Image.open(l_path)
-    r_img = Image.open(r_path)
     canvas = Image.new("RGB", (l_img.width + r_img.width, l_img.height),
                        (255, 255, 255))
     canvas.paste(l_img, (0, 0))
@@ -218,7 +208,9 @@ def main():
         log.info("已加载变换矩阵（shape=%s）", T.shape)
 
     left, right = build_comparison_geometries(source_pcd, target_pcd, T)
-    camera = _scene_camera(left + right)   # 左右两半共用一个相机
+    # 左右两半共用一个相机；--azimuth/--elevation 在此生效
+    camera = _scene_camera(left + right, elevation=args.elevation,
+                           azimuth=args.azimuth)
 
     if args.interactive:
         visualize_interactive(left, right)
@@ -228,8 +220,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{Path(args.source).stem}_vs_{Path(args.target).stem}_compare.png"
     render_side_by_side(left, right, out_path, camera,
-                        width=args.width, height=args.height,
-                        azimuth=args.azimuth, elevation=args.elevation)
+                        width=args.width, height=args.height)
 
 
 if __name__ == "__main__":
