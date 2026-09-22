@@ -102,7 +102,10 @@ def save_pointcloud(path, points, out_format="ply"):
     if out_format == "npy":
         np.save(str(path.with_suffix(".npy")), points)
     elif out_format == "npz":
-        np.savez_compressed(str(path.with_suffix(".npz")), points=points)
+        # 同时写 points 与 point_cloud 两个键：points 向后兼容，
+        # point_cloud 供 app/（load_scene/compare_registration/export_demo）读取。
+        np.savez_compressed(str(path.with_suffix(".npz")),
+                            points=points, point_cloud=points)
     elif out_format == "ply":
         import open3d as o3d
         pcd = o3d.geometry.PointCloud()
