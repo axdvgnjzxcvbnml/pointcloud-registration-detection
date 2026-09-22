@@ -1,0 +1,16 @@
+# Python 3.8 / CUDA 11.7 / PyTorch 1.13.1（cu117）配套依赖
+# 安装顺序：先装 torch/torchvision（官方 cu117 index），再 pip install -r requirements.txt
+
+numpy==1.24.4
+scipy>=1.9,<1.11
+open3d==0.17.0
+pillow>=10.0
+PyYAML>=6.0
+opencv-python>=4.8
+ultralytics==8.2.*
+
+# 可选（评测 / 训练增强 / 演示导出）：
+# thop
+# tensorboardX
+# imageio
+# imageio-ffmpeg
