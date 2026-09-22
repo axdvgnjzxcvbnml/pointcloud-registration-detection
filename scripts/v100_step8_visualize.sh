@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-step() { echo ""; echo "===== $1 =====" }
+step() { echo ""; echo "===== $1 ====="; }
 ok()   { echo "  [OK] $1"; }
 fail() { echo "  [FAIL] $1"; exit 1; }
 
