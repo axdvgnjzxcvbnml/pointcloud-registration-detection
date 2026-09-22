@@ -14,6 +14,11 @@
 #        python detection/finetune_lightweight.py \
 #            --config configs/ablation/04_fusion_lightweight.yaml \
 #            --resume results/ablation/02_fusion_concat/fusion_epoch060.pth
+#
+# 【这组跑完应得到】验证轻量化收益：
+#   mAP 允许略降（一般 ≤1~2 个点），但参数量应约为 02 的 1/2、
+#   FLOPs 与推理延迟应显著下降（目标：参数量 ~1M 量级）；
+#   若 mAP 下降超过 3 个点，需检查 DSConv1d 实现与微调轮数。
 # ============================================================
 base: ../default.yaml
 

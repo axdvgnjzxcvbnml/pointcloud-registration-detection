@@ -4,6 +4,11 @@
 # 继承 configs/default.yaml（base），仅覆盖差异字段。
 # 模型开关：图像分支关闭 → 纯点云（VoteNet）检测。
 #
+# 【这组跑完应得到】mAP@0.25/0.5 作为全项目参照基线：
+#   若直接用 VoteNet 预训练权重，mAP 应接近其论文公开水平；
+#   融合方法（02/03/04）应不低于本组（点云信息完整保留），
+#   单 RGB（01）应明显低于本组（缺少真实几何）。
+#
 # 运行：
 #   python detection/train_fusion.py --config configs/ablation/00_votenet_baseline.yaml
 #   python detection/evaluate_detection.py \

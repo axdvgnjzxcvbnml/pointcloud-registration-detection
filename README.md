@@ -6,6 +6,36 @@
 
 面向室内场景（SUN RGB-D 数据集）的「RGB-D 点云拼接 + 三维目标检测」工程骨架与文档模板。
 
+## 0. V100 上手指南
+
+> 目标：V100 开机后**只跑 GPU 训练和推理**，环境、数据、调试全部已在 CPU 侧完成。
+> 在 V100 上按顺序执行以下 8 个一键脚本（每个脚本自带前置检查、逐步日志、收尾提示）：
+
+| 步骤 | 命令 | 预期耗时 | 预期输出 | 失败看 |
+| --- | --- | --- | --- | --- |
+| 1 环境 | `bash scripts/v100_step1_env.sh` | 5~15 分钟 | PointNet2 编译 OK、`weights/votenet_sunrgbd.pth` | `docs/troubleshooting.md` 1/2 节 |
+| 2 预处理 | `bash scripts/v100_step2_preprocess.sh` | 10~30 分钟 | `results/preprocess/{pcd,pairs,pose_gt,detection}` | 3 节（数据路径/深度单位） |
+| 3 配准 | `bash scripts/v100_step3_registration.sh` | 30~60 分钟 | `results/registration/eval/summary.json`（RMSE/旋转/平移/成功率） | 3.4 节 |
+| 4 基线 | `bash scripts/v100_step4_votenet_baseline.sh` | 5~10 分钟 | `results/detection/baseline/`（mAP@0.25/0.5） | 1.2 节（kernel image） |
+| 5 融合训练 | `bash scripts/v100_step5_fusion_train.sh` | 4~8 小时 | `results/detection/fusion/fusion_epoch060.pth` + mAP | 4 节（OOM） |
+| 6 轻量化 | `bash scripts/v100_step6_lightweight.sh` | 1~2 小时 | `results/detection/lightweight/lightweight_epoch020.pth` + 参数量/FLOPs | 4 节 |
+| 7 消融 | `bash scripts/v100_step7_ablation.sh` | 18~36 小时 | `results/ablation/ablation_summary.csv`（五组对比表） | 4 节 |
+| 8 可视化 | `bash scripts/v100_step8_visualize.sh` | ~10 分钟 | `results/vis/`、`results/demo/*.gif|mp4` | 6 节（libGL/ffmpeg） |
+
+详细的分步命令与检查项见 `docs/v100_checklist.md`；消融配置说明见 `configs/ablation/README.md`。
+
+### 0.1 CPU 侧已完成清单（上 V100 前不用重复做）
+
+- [x] **真实 SUN3D 数据全流程验证**：MIT studyroom 49 帧（3DMatch 镜像）→ 深度转点云（`depth_scale=1000`）→ 60 帧对 → 6DOF 真值 → 配准全链路 → 可视化全部跑通；真实 vs 模拟配准指标对比见 `docs/experiment_log.md`
+- [x] **VoteNet 训练数据管线**：真实点云 49 帧 × 50000 点 mini 集生成，与 VoteNet 官方 dataloader 格式对齐（双键 `point_cloud`/`point_clouds`），`tests/test_votenet_dataloader_cpu.py` 49/49 PASS
+- [x] **模型自检**：`tests/test_cpu_forward_checks.py` 17 项 PASS（YOLO P3 特征、FusionModel 双融合方式前向、train_fusion 1 epoch、finetune_lightweight 1 epoch）；`tests/test_map_cpu.py` 18 项 PASS（IoU/mAP/load_gt）
+- [x] **发现并修复的上线级 bug**：轻量化 `load_pretrained` 形状不匹配（`strict=False` 不跳过 size mismatch）→ 已按 shape 过滤（见 `docs/troubleshooting.md` 5.5）
+- [x] **8 个 V100 一键脚本**：参数已调好、前置检查/日志/收尾齐全（`scripts/v100_step1~8.sh`）
+- [x] **消融配置**：五组配置注释「跑完应得到什么结果」+ 对比关系 README
+- [x] **真值管线**：`preprocess/extract_gt.py`（官方标注 → `data/gt/gt.json`）+ `detection/load_gt.py` + mAP 单测
+- [x] **CI**：push 自动跑语法检查 + 无数据集/无 GPU 冒烟 + 环境检查（`.github/workflows/ci.yml`）
+
+
 ## 1. 项目简介
 
 本工程实现一条从原始 RGB-D 数据到拼接点云、再到三维目标检测的完整流水线：
@@ -199,6 +229,40 @@ python detection/finetune_lightweight.py \
     --config configs/ablation/04_fusion_lightweight.yaml \
     --resume results/ablation/02_fusion_concat/fusion_epoch060.pth
 ```
+
+### 4.7 真实 SUN3D 数据快速体验（CPU 已验证跑通）
+
+> 已用真实 SUN3D 序列（MIT studyroom 49 帧，3DMatch 官方镜像，`data/SUN3D/mit_studyroom/`）跑通全部脚本，
+> 命令如下（深度图单位 = 毫米，故 `--depth_scale 1000`）：
+
+```bash
+# 1) 深度图 → 点云（每帧 .ply + .npz，约 26 万点）
+python preprocess/depth_to_pointcloud.py --depth data/SUN3D/mit_studyroom/depth/frame-000000.depth.png \
+    --K data/SUN3D/mit_studyroom/intrinsics/frame-000000.txt \
+    --depth_scale 1000 --out_path results/preprocess/pcd_real/mit_studyroom_000000 --out_format ply
+
+# 2) 帧对采样（间隔 5/10/30 各 20 对）+ 6DOF 真值
+python preprocess/sample_frame_pairs.py --sun3d_dir data/SUN3D --scene_list mit_studyroom \
+    --target_num 60 --out_path results/preprocess/pairs/pairs_real.json
+python preprocess/compute_pose_gt.py --pairs results/preprocess/pairs/pairs_real.json \
+    --sun3d_dir data/SUN3D --out_dir results/preprocess/pose_gt_real
+
+# 3) 配准全链路评测（60 对 × 4 方法，纯 CPU 约 25 分钟）
+python registration/evaluate_registration.py --pairs results/preprocess/pairs/pairs_real.json \
+    --pcd_dir results/preprocess/pcd_real --pose_gt_dir results/preprocess/pose_gt_real \
+    --out_dir results/registration/eval_real
+
+# 4) 可视化（场景总览 / 拼接前后对比 / GIF / 检测框叠加）
+python app/load_scene.py --scene-dir data/SUN3D/mit_studyroom/clouds --frame-limit 5 --out-dir results/vis
+python app/compare_registration.py --source results/preprocess/pcd_real/mit_studyroom_000060.ply \
+    --target results/preprocess/pcd_real/mit_studyroom_000065.ply \
+    --transform results/preprocess/pose_gt_real/mit_studyroom_000060_000065.txt --out-dir results/vis
+python app/export_demo.py --scene-dir data/SUN3D/mit_studyroom/clouds --n-frames 25 --fps 8 --gif --out-dir results/demo
+python app/overlay_detection.py --point-cloud results/preprocess/pcd_real/mit_studyroom_000000.ply \
+    --detections results/detection/sim_dets.json --out-dir results/vis
+```
+
+真实 vs 模拟配准指标对比与原因分析见 `docs/experiment_log.md` 1.1 节。
 
 > push 代码时 GitHub Actions 会自动执行 Python 语法检查与 `--ci` 冒烟测试（不跑 GPU / 数据集任务），配置见 `.github/workflows/ci.yml`。
 

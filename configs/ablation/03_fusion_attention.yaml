@@ -5,6 +5,11 @@
 # 双分支开启，融合方式为 Cross-Attention
 # （query=点云种子特征, key/value=图像特征），与 Concat 对比。
 #
+# 【这组跑完应得到】验证 Attention 融合的增益：
+#   mAP 应与 02（Concat）相当（通常 ±1~2 个点内波动）；
+#   若明显高于 02，说明跨模态注意力确实更好，可考虑换主融合；
+#   若明显低于 02，说明简单拼接已足够，保留 Concat 为主方案。
+#
 # 运行：
 #   python detection/train_fusion.py --config configs/ablation/03_fusion_attention.yaml
 # ============================================================

@@ -4,6 +4,11 @@
 # 继承 configs/default.yaml（base），仅覆盖差异字段。
 # 双分支开启，融合方式为 Concat + 1×1 Conv（主融合方案）。
 #
+# 【这组跑完应得到】本项目主结果：
+#   mAP@0.25/0.5 应高于 00 与 01（双分支信息互补）；
+#   若与 00 持平但高于 01，说明图像分支增益有限但未损伤点云；
+#   应同时记录参数量/FLOPs 供 04 轻量化对比。
+#
 # 运行：
 #   python detection/train_fusion.py --config configs/ablation/02_fusion_concat.yaml
 # ============================================================

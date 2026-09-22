@@ -190,6 +190,22 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 - `bash scripts/run_smoke.sh --ci` 在沙箱全通过（PASS=4 / FAIL=0）：Python 版本、Open3D 可用、合成深度图转点云（z=1.0000m 断言通过）、合成立方体粗配准 + 精配准（旋转/平移误差 < 阈值）。完整模式 PASS=8 / FAIL=0（CUDA 不可用仅 WARN）。
 - `scripts/check_env.sh --ci` 可正确报告核心依赖版本（沙箱版本与目标环境不同时会如实报 FAIL，属预期；CI 会安装目标版本）。
 
+### 5.5 CPU 侧模型自检（2026-09-22）
+
+> 目标：把「训练循环能不能跑」这类调试全部在 CPU 侧完成，V100 开机后只跑真数据。
+> 入口：`python3 tests/test_cpu_forward_checks.py`（17 项 PASS）与 `python3 tests/test_map_cpu.py`（18 项 PASS）。
+
+- **VoteNet 主干是 CUDA-only**：`Pointnet2Backbone` 依赖 `external/votenet/pointnet2` 的 CUDA 算子，CPU 沙箱无法实例化。自检用 `MockVoteNetBackbone`（MLP，输出形状 `(B,N,3)+(B,N,128)` 与真实主干一致）替换，验证「投影 + 融合头 + 检测头 + 训练循环」的装配正确性；真实主干在 V100 上由 `v100_step1` 编译后生效。
+- **YOLOv8n P3 特征（CPU 实跑）**：输入随机 `(1,3,640,640)` → `model.model[15]`（C2f）→ 1×1 Conv 升维 → 输出 `(1,128,80,80)`，与 `yolov8_feature.py` 默认索引一致（见 5.1）。
+- **FusionModel 前向（concat / attention，CPU 实跑）**：两种融合方式的输出键与 shape 全部符合预期（`objectness (B,N,1)`、`center/size (B,N,10,3)`、`heading (B,N,10,2)`、`class_scores (B,N,10)`）；反向传播中融合头梯度全覆盖、检测头受监督分支（objectness/center）有梯度。
+  - **预期行为说明**：`compute_loss` 目前只监督 objectness + center（其余分支为占位损失 0，见 `train_fusion.compute_loss` 的 TODO），因此 size/heading/class 分支无梯度属正常，不是 bug。
+- **train_fusion() 真实训练循环（CPU 实跑 1 epoch）**：4 帧模拟 mini 数据（5000 点/帧 + rgb/K）跑通完整训练循环（dataloader → forward → loss → backward → clip_grad → optimizer.step → scheduler → 存权重），产出 `fusion_epoch001.pth`。
+- **finetune_lightweight() 真实微调循环（CPU 实跑 1 epoch）**：基于上一步融合权重微调 1 epoch 跑通，产出 `lightweight_epoch001.pth`。
+  - **发现并修复的 bug**：`load_pretrained` 原实现 `strict=False` 仍会对轻量化头（通道 256→128）形状不匹配抛 `RuntimeError: size mismatch ...`。已改为 `_filter_by_shape` 先按键名 + shape 过滤，只迁移可复用的主干/投影权重，头部从零训练；日志按「迁移 X/Y 键」如实报告。
+- **mAP 评测逻辑（CPU 单测 18 项）**：`tests/test_map_cpu.py` 用模拟预测 + 模拟真值验证 `box3d_iou`（完全重叠 1.0 / 无重叠 0.0 / 半重叠精确值）、`compute_mAP`（全命中 = 1.0；含 FP 时 AP 下降；类别标错不算 TP）、`load_gt` 读写回路（形状/索引/缺失帧对齐）。
+  - **口径说明**：mAP 按 VoteNet 官方对全部 10 类取平均，无真值/无检测的类 AP=0（单测中以 10 类平均 = 0.2 验证该口径）。
+- **真实数据格式验证**：`tests/test_votenet_dataloader_cpu.py` 校验 49 帧真实点云生成的 VoteNet 数据（50000 点/帧、双键 `point_cloud`/`point_clouds`、bbox/vote 键齐全）49/49 PASS；当前 SUN3D studyroom 无 3D 框标注，bbox=0 属预期，真实标注由 `preprocess/extract_gt.py` 在 V100 数据上生成。
+
 ---
 
 ## 6. 其他常见问题
