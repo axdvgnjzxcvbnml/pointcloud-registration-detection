@@ -1,18 +1,13 @@
-# weights/ —— 模型权重目录
+# weights/ —— 模型权重
 
-本目录存放模型权重。**内容不入库**（见 `.gitignore`），仅保留本 README。
+存放预训练权重与训练产出 checkpoint，**不提交到本仓库**（已在 `.gitignore` 忽略，本 README 除外）。
 
-## 约定
+## 预期文件
 
-| 文件 | 来源 | 用途 |
-| --- | --- | --- |
-| `votenet_sunrgbd.pth` | VoteNet 官方预训练权重（README 提供下载链接） | 点云分支初始化 / 基线评测 |
-| `yolov8n.pt` | ultralytics 自动下载（放在工作目录也可） | 图像分支初始化 |
-| `fusion_epoch060.pth` | 训练产出（train_fusion.py） | 主融合模型 |
-| `lightweight_epoch020.pth` | 微调产出（finetune_lightweight.py） | 轻量化模型 |
+| 文件 | 来源 |
+| --- | --- |
+| `yolov8n.pt` | YOLOv8n COCO 预训练权重（ultralytics 首次运行自动下载，或手动放入） |
+| `votenet_sunrgbd.pth` | VoteNet 官方 SUN RGB-D 预训练权重（按 VoteNet 官方 README 链接下载） |
+| `fusion_epoch060.pth` 等 | `detection/train_fusion.py` / `finetune_lightweight.py` 的训练产出（默认写到 `results/`，可按配置改到此处） |
 
-## 说明
-
-- 权重文件较大（数百 MB），不入库；如需备份请自行处理；
-- 下载 VoteNet 权重前先确认许可证与来源；
-- 训练/微调权重会自动保存到 `results/ablation/<实验ID>/` 而非本目录（见 `configs/default.yaml`）。
+> 权重文件较大，请勿拷贝入库；实验记录中只写权重路径与来源。

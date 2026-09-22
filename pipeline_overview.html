@@ -1,117 +1,195 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>基于深度相机的物体点云拼接与目标检测 —— 流水线总览</title>
+<html style="margin:0;padding:0;">
+<title>点云拼接与目标检测流水线总览</title>
+<div style="width:100%;box-sizing:border-box;font-family:system-ui,-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#fafbfc;padding:16px 12px;">
 <style>
-  :root {
-    --bg: #f7f8fa;
-    --card: #ffffff;
-    --line: #d9dee8;
-    --text: #1f2733;
-    --muted: #5c6b7a;
-    --accent: #2f6fed;
-    --ok: #2e9e5b;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: var(--bg); color: var(--text); line-height: 1.55;
-    padding: 40px 20px;
-  }
-  .wrap { max-width: 1080px; margin: 0 auto; }
-  h1 { font-size: 26px; margin-bottom: 6px; }
-  .sub { color: var(--muted); margin-bottom: 28px; }
-  .stage { margin-bottom: 26px; }
-  .stage h2 {
-    font-size: 15px; color: var(--accent); margin-bottom: 10px;
-    padding-left: 10px; border-left: 4px solid var(--accent);
-  }
-  .grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 12px;
-  }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .card .title { font-weight: 600; margin-bottom: 4px; }
-  .card .file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  .card .desc { font-size: 13px; color: var(--text); }
-  .arrow { text-align: center; color: var(--muted); font-size: 20px; margin: 4px 0; }
-  .note {
-    margin-top: 28px; font-size: 13px; color: var(--muted);
-    background: #eef3fb; border: 1px solid var(--line); border-radius: 8px;
-    padding: 12px 16px;
-  }
-  .badge { display:inline-block; font-size:11px; padding:1px 8px; border-radius:999px;
-    background:#e8eefb; color:var(--accent); margin-left:6px; vertical-align:middle;}
+  .t-title{font:700 20px system-ui;fill:#101828}
+  .t-sub{font:12.5px system-ui;fill:#5a6b85}
+  .h-t{font:600 14px system-ui;fill:#1a2333}
+  .h-s{font:11.5px system-ui;fill:#44536b}
+  .step-t{font:600 12.5px system-ui;fill:#20293a}
+  .step-d{font:11.5px system-ui;fill:#5a6b85}
+  .arr-label{font:11px system-ui;fill:#8a97ab}
+  .lane-h{font:600 13px system-ui;fill:#20293a}
+  .lane-d{font:11.5px system-ui;fill:#5a6b85}
+  .note{font:11.5px system-ui;fill:#7a8699}
 </style>
-</head>
-<body>
-<div class="wrap">
-  <h1>基于深度相机的物体点云拼接与目标检测</h1>
-  <div class="sub">SUN RGB-D 数据集 · VoteNet + YOLOv8n · 流水线总览（代码骨架，实验数值待运行回填）</div>
+<svg viewBox="0 0 1180 790" width="100%" style="display:block;" role="img" aria-label="点云拼接与目标检测流水线总览示意图（示意）">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a97ab"/>
+    </marker>
+  </defs>
 
-  <div class="stage">
-    <h2>① 数据预处理 preprocess/</h2>
-    <div class="grid">
-      <div class="card"><div class="title">解析 SUN RGB-D</div><div class="file">parse_sunrgbd.py</div><div class="desc">读取图像/深度/标注/外参，输出帧 RGB+K npz</div></div>
-      <div class="card"><div class="title">深度 → 点云</div><div class="file">depth_to_pointcloud.py</div><div class="desc">深度图反投影 + 去噪 + 下采样，输出每帧点云</div></div>
-      <div class="card"><div class="title">帧对采样</div><div class="file">sample_frame_pairs.py</div><div class="desc">SUN3D 序列按间隔 5/10/30 抽取帧对</div></div>
-      <div class="card"><div class="title">位姿真值</div><div class="file">compute_pose_gt.py</div><div class="desc">由外参计算帧间 6DOF 相对位姿 T_AB</div></div>
-      <div class="card"><div class="title">检测数据</div><div class="file">generate_detection_data.py</div><div class="desc">生成 VoteNet 训练数据（投票标签/真值框）</div></div>
-    </div>
-  </div>
+  <!-- 标题区 -->
+  <text class="t-title" x="30" y="34">基于深度相机的物体点云拼接与目标检测 — 流水线总览（示意）</text>
+  <text class="t-sub" x="30" y="54">数据：SUN RGB-D / SUN3D 序列 ｜ 技术栈：Python 3.8 + PyTorch 1.13.1 + CUDA 11.7 + Open3D 0.17.0 + VoteNet + YOLOv8n ｜ 环境：单卡 V100</text>
 
-  <div class="arrow">▼</div>
+  <!-- ================= 阶段卡片 ================= -->
+  <!-- ① 数据预处理 -->
+  <g>
+    <rect class="card" x="30" y="70" width="252" height="530" rx="12"/>
+    <rect class="h-c1" x="30" y="70" width="252" height="36" rx="12"/>
+    <rect class="h-c1" x="30" y="88" width="252" height="18"/>
+    <text class="h-t" x="48" y="88">① 数据预处理 preprocess/</text>
+    <text class="h-s" x="48" y="101">第二批 ｜ 解析 + 反投影 + 数据生成</text>
 
-  <div class="stage">
-    <h2>② 点云拼接 registration/（纯 CPU）</h2>
-    <div class="grid">
-      <div class="card"><div class="title">预处理</div><div class="file">preprocess_pointcloud.py</div><div class="desc">统计去噪 · 体素降采样 · 法向量估计</div></div>
-      <div class="card"><div class="title">粗配准</div><div class="file">coarse_registration.py</div><div class="desc">FPFH + RANSAC，输出初始变换</div></div>
-      <div class="card"><div class="title">精配准</div><div class="file">fine_registration.py</div><div class="desc">改进 ICP：点到平面 + 自适应阈值 + 早停</div></div>
-      <div class="card"><div class="title">评测</div><div class="file">evaluate_registration.py</div><div class="desc">RMSE / 旋转 / 平移 / 成功率</div></div>
-      <div class="card"><div class="title">可视化</div><div class="file">visualize_registration.py</div><div class="desc">拼接前后对比图</div></div>
-    </div>
-  </div>
+    <rect class="b-c1" x="40" y="122" width="232" height="62" rx="8"/>
+    <text class="step-t" x="52" y="146">parse_sunrgbd.py</text>
+    <text class="step-d" x="52" y="167">解析 RGB·深度·内参·外参</text>
 
-  <div class="arrow">▼</div>
+    <rect class="b-c1" x="40" y="198" width="232" height="62" rx="8"/>
+    <text class="step-t" x="52" y="222">depth_to_pointcloud.py</text>
+    <text class="step-d" x="52" y="243">深度图反投影为三维点云</text>
 
-  <div class="stage">
-    <h2>③ 三维目标检测 detection/（V100 GPU）</h2>
-    <div class="grid">
-      <div class="card"><div class="title">点云分支</div><div class="file">votenet_baseline.py</div><div class="desc">VoteNet 主干（PointNet2）种子点特征</div></div>
-      <div class="card"><div class="title">图像分支</div><div class="file">yolov8_feature.py</div><div class="desc">YOLOv8n P3 层 80×80×64 语义特征</div></div>
-      <div class="card"><div class="title">投影采样</div><div class="file">projection.py</div><div class="desc">3D 种子 → 2D 双线性采样图像特征</div></div>
-      <div class="card"><div class="title">融合头</div><div class="file">fusion_head.py</div><div class="desc">Concat / Cross-Attention 特征融合</div></div>
-      <div class="card"><div class="title">训练</div><div class="file">train_fusion.py</div><div class="desc">冻结双主干，只训融合头+检测头（60 epoch）</div></div>
-      <div class="card"><div class="title">轻量化</div><div class="file">lightweight_head.py</div><div class="desc">DSConv1d 深度可分离头，通道 256→128</div></div>
-      <div class="card"><div class="title">微调</div><div class="file">finetune_lightweight.py</div><div class="desc">基于融合权重微调 20 epoch</div></div>
-      <div class="card"><div class="title">评测</div><div class="file">evaluate_detection.py</div><div class="desc">mAP@0.25/0.5 · 参数量 · FLOPs · 速度</div></div>
-    </div>
-  </div>
+    <rect class="b-c1" x="40" y="274" width="232" height="62" rx="8"/>
+    <text class="step-t" x="52" y="298">sample_frame_pairs.py</text>
+    <text class="step-d" x="52" y="319">SUN3D 帧对采样（间隔 5/10/30）</text>
 
-  <div class="arrow">▼</div>
+    <rect class="b-c1" x="40" y="350" width="232" height="62" rx="8"/>
+    <text class="step-t" x="52" y="374">compute_pose_gt.py</text>
+    <text class="step-d" x="52" y="395">相对位姿 T_AB 真值（6DOF）</text>
 
-  <div class="stage">
-    <h2>④ 集成与可视化 app/</h2>
-    <div class="grid">
-      <div class="card"><div class="title">场景展示</div><div class="file">load_scene.py</div><div class="desc">多帧点云加载与离屏渲染 PNG</div></div>
-      <div class="card"><div class="title">配准对比</div><div class="file">compare_registration.py</div><div class="desc">左右视图：配准前 vs 配准后</div></div>
-      <div class="card"><div class="title">检测叠加</div><div class="file">overlay_detection.py</div><div class="desc">3D 框 + 类别分数标签</div></div>
-      <div class="card"><div class="title">演示导出</div><div class="file">export_demo.py</div><div class="desc">相机环绕动画导出 GIF / MP4</div></div>
-    </div>
-  </div>
+    <rect class="b-c1" x="40" y="426" width="232" height="62" rx="8"/>
+    <text class="step-t" x="52" y="450">generate_detection_data.py</text>
+    <text class="step-d" x="52" y="471">VoteNet 数据（5 万点/帧）</text>
 
-  <div class="note">
-    说明：本页为流水线静态总览。所有实验数值（mAP、RMSE、参数量等）为占位（TBD），
-    需在目标服务器（单卡 V100）运行后回填至 README.md 与 docs/experiment_log.md。
-    配置模板见 configs/default.yaml；消融实验见 configs/ablation/；CI 冒烟见 .github/workflows/ci.yml。
-  </div>
+    <line class="arrow" x1="156" y1="184" x2="156" y2="196" marker-end="url(#arr)"/>
+    <line class="arrow" x1="156" y1="260" x2="156" y2="272" marker-end="url(#arr)"/>
+    <line class="arrow" x1="156" y1="336" x2="156" y2="348" marker-end="url(#arr)"/>
+    <line class="arrow" x1="156" y1="412" x2="156" y2="424" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ② 点云拼接 -->
+  <g>
+    <rect class="card" x="318" y="70" width="252" height="530" rx="12"/>
+    <rect class="h-c2" x="318" y="70" width="252" height="36" rx="12"/>
+    <rect class="h-c2" x="318" y="88" width="252" height="18"/>
+    <text class="h-t" x="336" y="88">② 点云拼接 registration/</text>
+    <text class="h-s" x="336" y="101">第三批 ｜ 纯 CPU</text>
+
+    <rect class="b-c2" x="328" y="122" width="232" height="62" rx="8"/>
+    <text class="step-t" x="340" y="146">preprocess_pointcloud.py</text>
+    <text class="step-d" x="340" y="167">去噪·体素降采样·法向量</text>
+
+    <rect class="b-c2" x="328" y="198" width="232" height="62" rx="8"/>
+    <text class="step-t" x="340" y="222">coarse_registration.py</text>
+    <text class="step-d" x="340" y="243">FPFH + RANSAC 粗配准</text>
+
+    <rect class="b-c2" x="328" y="274" width="232" height="62" rx="8"/>
+    <text class="step-t" x="340" y="298">fine_registration.py</text>
+    <text class="step-d" x="340" y="319">改进 ICP（点到平面+早停）</text>
+
+    <rect class="b-c2" x="328" y="350" width="232" height="62" rx="8"/>
+    <text class="step-t" x="340" y="374">evaluate_registration.py</text>
+    <text class="step-d" x="340" y="395">RMSE·旋转/平移误差·成功率</text>
+
+    <rect class="b-c2" x="328" y="426" width="232" height="62" rx="8"/>
+    <text class="step-t" x="340" y="450">visualize_registration.py</text>
+    <text class="step-d" x="340" y="471">拼接前后对比视图</text>
+
+    <line class="arrow" x1="444" y1="184" x2="444" y2="196" marker-end="url(#arr)"/>
+    <line class="arrow" x1="444" y1="260" x2="444" y2="272" marker-end="url(#arr)"/>
+    <line class="arrow" x1="444" y1="336" x2="444" y2="348" marker-end="url(#arr)"/>
+    <line class="arrow" x1="444" y1="412" x2="444" y2="424" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ③ 三维目标检测 -->
+  <g>
+    <rect class="card" x="606" y="70" width="252" height="530" rx="12"/>
+    <rect class="h-c3" x="606" y="70" width="252" height="36" rx="12"/>
+    <rect class="h-c3" x="606" y="88" width="252" height="18"/>
+    <text class="h-t" x="624" y="88">③ 三维目标检测 detection/</text>
+    <text class="h-s" x="624" y="101">第四批 ｜ 双分支特征融合</text>
+
+    <rect class="b-c3" x="616" y="122" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="146">votenet_baseline.py</text>
+    <text class="step-d" x="628" y="167">点云分支（VoteNet）</text>
+
+    <rect class="b-c3" x="616" y="198" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="222">yolov8_feature.py</text>
+    <text class="step-d" x="628" y="243">RGB 分支（YOLOv8n P3 层）</text>
+
+    <rect class="b-c3" x="616" y="274" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="298">projection.py</text>
+    <text class="step-d" x="628" y="319">3D→2D 投影 + 双线性采样</text>
+
+    <rect class="b-c3" x="616" y="350" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="374">fusion_head.py</text>
+    <text class="step-d" x="628" y="395">Concat / Cross-Attention 融合</text>
+
+    <rect class="b-c3" x="616" y="426" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="450">lightweight_head.py</text>
+    <text class="step-d" x="628" y="471">DSConv1d 轻量化（可选）</text>
+
+    <rect class="b-c3" x="616" y="502" width="232" height="62" rx="8"/>
+    <text class="step-t" x="628" y="526">train_fusion.py</text>
+    <text class="step-d" x="628" y="547">evaluate_detection.py · 60/20 epoch</text>
+
+    <line class="arrow" x1="732" y1="184" x2="732" y2="196" marker-end="url(#arr)"/>
+    <line class="arrow" x1="732" y1="260" x2="732" y2="272" marker-end="url(#arr)"/>
+    <line class="arrow" x1="732" y1="336" x2="732" y2="348" marker-end="url(#arr)"/>
+    <line class="arrow" x1="732" y1="412" x2="732" y2="424" marker-end="url(#arr)"/>
+    <line class="arrow" x1="732" y1="488" x2="732" y2="500" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- ④ 可视化集成 -->
+  <g>
+    <rect class="card" x="894" y="70" width="252" height="530" rx="12"/>
+    <rect class="h-c4" x="894" y="70" width="252" height="36" rx="12"/>
+    <rect class="h-c4" x="894" y="88" width="252" height="18"/>
+    <text class="h-t" x="912" y="88">④ 可视化集成 app/</text>
+    <text class="h-s" x="912" y="101">第六批 ｜ Open3D 展示</text>
+
+    <rect class="b-c4" x="904" y="122" width="232" height="62" rx="8"/>
+    <text class="step-t" x="916" y="146">load_scene.py</text>
+    <text class="step-d" x="916" y="167">加载场景多帧数据</text>
+
+    <rect class="b-c4" x="904" y="198" width="232" height="62" rx="8"/>
+    <text class="step-t" x="916" y="222">compare_registration.py</text>
+    <text class="step-d" x="916" y="243">拼接前后左右视图对比</text>
+
+    <rect class="b-c4" x="904" y="274" width="232" height="62" rx="8"/>
+    <text class="step-t" x="916" y="298">overlay_detection.py</text>
+    <text class="step-d" x="916" y="319">3D 框 + 类别标注叠加</text>
+
+    <rect class="b-c4" x="904" y="350" width="232" height="62" rx="8"/>
+    <text class="step-t" x="916" y="374">export_demo.py</text>
+    <text class="step-d" x="916" y="395">导出 GIF / 视频</text>
+
+    <line class="arrow" x1="1020" y1="184" x2="1020" y2="196" marker-end="url(#arr)"/>
+    <line class="arrow" x1="1020" y1="260" x2="1020" y2="272" marker-end="url(#arr)"/>
+    <line class="arrow" x1="1020" y1="336" x2="1020" y2="348" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- 卡片间数据流箭头 -->
+  <line class="arrow" x1="286" y1="330" x2="312" y2="330" marker-end="url(#arr)"/>
+  <text class="arr-label" x="270" y="348">点云·帧对·真值</text>
+  <line class="arrow" x1="574" y1="330" x2="600" y2="330" marker-end="url(#arr)"/>
+  <text class="arr-label" x="566" y="348">对齐点云</text>
+  <line class="arrow" x1="862" y1="330" x2="888" y2="330" marker-end="url(#arr)"/>
+  <text class="arr-label" x="856" y="348">检测框·类别</text>
+
+  <!-- 支撑层 -->
+  <text class="lane-h" x="30" y="628">支撑层（贯穿全流程）</text>
+  <rect class="card" x="30" y="640" width="1116" height="96" rx="12"/>
+
+  <rect class="b-c1" x="46" y="654" width="256" height="64" rx="8"/>
+  <text class="lane-h" x="60" y="678">configs/</text>
+  <text class="lane-d" x="60" y="698">default.yaml 主配置 + ablation/ 消融配置（第五批）</text>
+
+  <rect class="b-c2" x="316" y="654" width="256" height="64" rx="8"/>
+  <text class="lane-h" x="330" y="678">weights/</text>
+  <text class="lane-d" x="330" y="698">VoteNet 官方权重 + YOLOv8n.pt + 训练产出</text>
+
+  <rect class="b-c3" x="586" y="654" width="256" height="64" rx="8"/>
+  <text class="lane-h" x="600" y="678">results/</text>
+  <text class="lane-d" x="600" y="698">预处理产物 · 配准/检测指标 · 日志</text>
+
+  <rect class="b-c4" x="856" y="654" width="256" height="64" rx="8"/>
+  <text class="lane-h" x="870" y="678">docs/</text>
+  <text class="lane-d" x="870" y="698">setup / troubleshooting / experiment_log（第七批）</text>
+
+  <text class="note" x="30" y="768">示意：卡片=模块目录，步骤=脚本文件，批号=输出批次；具体参数见 configs/default.yaml（第一批交付）。</text>
+</svg>
 </div>
-</body>
 </html>

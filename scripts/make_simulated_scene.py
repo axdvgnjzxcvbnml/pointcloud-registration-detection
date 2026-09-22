@@ -38,7 +38,7 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# 640x480 内参（与 preprocess/defaults.py 的 DEFAULT_K 一致，真实数据需替换）
+# 640x480 内参（与 parse_sunrgbd.py 的 DEFAULT_K 一致，真实数据需替换）
 DEFAULT_K = np.array([[528.0, 0.0, 319.5],
                       [0.0, 528.0, 239.5],
                       [0.0, 0.0, 1.0]], dtype=np.float64)

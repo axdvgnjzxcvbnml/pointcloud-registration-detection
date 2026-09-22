@@ -1,13 +1,9 @@
-# docs/ —— 项目文档
+# docs/ —— 文档
 
-| 文件 | 内容 | 输出批次 |
-| --- | --- | --- |
-| `setup.md` | 环境搭建：V100 / Python 3.8 / PyTorch 1.13.1 (cu117) / Open3D 0.17.0 / ultralytics 8.2.x / VoteNet 编译 | 第七批 |
-| `troubleshooting.md` | 常见问题排错：编译、显存、数据、配准、检测 | 第七批 |
-| `experiment_log.md` | 实验记录模板：记录规范、模板表、回填规则 | 第七批 |
+环境搭建、排错与实验记录模板。
 
-## 约定
-
-- 所有版本号以 README 环境表为准（PyTorch 1.13.1+cu117、Open3D 0.17.0、ultralytics 8.2.x、Python 3.8）；
-- 实验数值一律回填到 `experiment_log.md` 与 README 结果表，不入库任何需要运行才能得到的数值；
-- 服务器排错先查 `troubleshooting.md`，再查官方 Issue。
+| 文档 | 用途 |
+| --- | --- |
+| `setup.md` | V100 服务器环境搭建：Python 3.8、PyTorch 1.13.1+cu117、Open3D 0.17.0、VoteNet 克隆、PointNet2 CUDA 编译（重点 `TORCH_CUDA_ARCH_LIST="7.0"`）、数据软链、冒烟测试 |
+| `troubleshooting.md` | 常见报错与排查：PointNet2 编译失败、CUDA 版本不匹配、SUN RGB-D 路径/格式问题、OOM 等 |
+| `experiment_log.md` | 实验记录模板：日期、配置、mAP、参数量、备注，含消融总览表与配准评测表（数值均为 TBD 占位） |
