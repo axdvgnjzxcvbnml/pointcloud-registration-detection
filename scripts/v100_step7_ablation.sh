@@ -33,7 +33,7 @@ step "0/3 前置检查"
 [ -f results/preprocess/detection/split.json ] || fail "缺少检测数据：先跑 v100_step2_preprocess.sh"
 python3 -c "import torch; assert torch.cuda.is_available()" || fail "CUDA 不可用"
 mkdir -p results/ablation
-[ -f "${SUMMARY}" ] || echo "mode,mAP@0.25,mAP@0.5,params,flops,latency_ms" > "${SUMMARY}"
+[ -f "${SUMMARY}" ] || echo "mode,mAP@0.25,mAP@0.5,params_m,flops_g,speed_ms_mean" > "${SUMMARY}"
 ok "前置就绪（汇总表：${SUMMARY}）"
 
 run_eval() { # $1=config $2=ckpt $3=outdir
@@ -48,13 +48,15 @@ run_eval() { # $1=config $2=ckpt $3=outdir
 import csv, json, sys
 from pathlib import Path
 cfg, out, summary = sys.argv[1], sys.argv[2], sys.argv[3]
-mode = Path(cfg).stem.replace("0", "", 1)
+# 模式标识：去掉文件名前导序号（00_votenet_baseline -> votenet_baseline）
+mode = Path(cfg).stem.lstrip("0123456789").lstrip("_-")
 p = Path(out) / "map.json"
 if not p.is_file():
     print("  [WARN] %s 无 map.json，跳过汇总" % mode); sys.exit(0)
 m = json.load(open(p))
+# 键名以 evaluate_detection.py report.json 为准（params_m/flops_g/speed_ms_mean）
 row = [mode, m.get("mAP@0.25", ""), m.get("mAP@0.5", ""),
-       m.get("params", ""), m.get("flops", ""), m.get("latency_ms", "")]
+       m.get("params_m", ""), m.get("flops_g", ""), m.get("speed_ms_mean", "")]
 with open(summary, "a", newline="") as f:
     csv.writer(f).writerow(row)
 print("  已记录 %s 到 %s" % (mode, summary))

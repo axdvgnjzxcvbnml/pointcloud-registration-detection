@@ -14,6 +14,8 @@ python --version              # 应 3.8.x
 conda list | grep torch       # torch 应为 1.13.1 +cu117
 ```
 
+> **脚本调用方式（重要）**：本仓库所有 `.sh` 脚本（`scripts/*.sh`）一律用 `bash xxx.sh` 调用，**不要用 `./xxx.sh`**——GitHub 上的脚本文件未设置可执行位（仓库经 API 推送，模式固定为 100644），用 `bash` 调用即可，与执行位无关。
+
 - **预期**：`nvidia-smi` 显示 V100（16GB）、驱动版本 ≥ 515；`nvcc` 输出 `release 11.7`；`python` 3.8.x；torch 行含 `1.13.1` 与 `+cu117`。
 - **失败**：驱动/CUDA 版本不符 → `docs/setup.md` 第 0 节（安装前检查）；torch 版本不对 → `docs/setup.md` 第 2 节（PyTorch 安装）；`torch.cuda.is_available()` 为 False → `docs/troubleshooting.md` §2.1。
 
@@ -39,6 +41,17 @@ ls data/SUNRGBD | head       # 应看到 SUNRGBD/ 与 SUN3D/ 等子目录
 
 - **预期**：`data/SUNRGBD` 与 `data/SUNRGBDtoolbox` 均为软链且可访问；`SUN3D/` 序列目录存在。
 - **失败**：路径不存在 → `docs/troubleshooting.md` §3.1（FileNotFoundError）；目录结构不完整 → `docs/setup.md` 第 5 节（数据准备）。
+
+### 3.5 数据完整性检查（推荐，软链建立后必跑）
+
+```bash
+bash scripts/check_data.sh                    # 检查 data/SUNRGBD（默认）
+bash scripts/check_data.sh /mnt/data/SUNRGBD  # 指定路径
+```
+
+- **检查内容**：① 根路径可访问；② 场景定位（目录同时含 `image/` 与 `depth/`，兼容 `xtion/sun3ddata/<scene>/` 及 kv1/kv2/xtion 直接布局）；③ 每场景含 `image/`、`depth/`、`extrinsics/` 三目录；④ `image` 与 `depth` 文件数一致（`extrinsics` 允许少于帧数但必须非空）；⑤ 空文件 / PNG 魔数 / 抽样解码校验。
+- **预期**：汇总 `PASS=…  FAIL=0`，退出码 0，提示可继续 `bash scripts/v100_step2_preprocess.sh`。
+- **失败**：脚本会输出具体缺失路径与修复建议（软链失效 → 重新 `ln -s`；无场景 → 检查 zip 是否解压完整 / 软链是否指向数据根）；仍不解 → `docs/troubleshooting.md` 第 3 节。
 
 ## 4. 冒烟测试
 
@@ -112,8 +125,23 @@ python detection/train_fusion.py \
     --yolov8_ckpt weights/yolov8n.pt
 ```
 
-- **预期**：60 个 epoch 训练完成，每 epoch 打印 loss；checkpoint 存到 `results/ablation/02_fusion_concat/`；TensorBoard 日志（`tensorboard --logdir results/ablation/02_fusion_concat` 可看）。
+- **预期**：60 个 epoch 训练完成，每 epoch 打印 loss；checkpoint 存到 `results/ablation/02_fusion_concat/`（含 `latest.pth`、`fusion_best.pth`、每 10 epoch 的 `fusion_epochNNN.pth`）；TensorBoard 日志（`tensorboard --logdir results/ablation/02_fusion_concat` 可看）。
 - **失败**：OOM → `docs/troubleshooting.md` §4（batch_size 减半/清缓存/减小点采样数）；`grid_sample` 形状错 → 检查 `projection.py` 的 letterbox/特征图尺寸对齐。
+
+**断点续训（训练中断/超时后继续）**：
+
+```bash
+python detection/train_fusion.py \
+    --config configs/ablation/02_fusion_concat.yaml \
+    --resume results/ablation/02_fusion_concat/latest.pth \
+    --device cuda \
+    --votenet_ckpt weights/votenet_checkpoint.tar \
+    --yolov8_ckpt weights/yolov8n.pt
+```
+
+- 断点文件含 `epoch / model / optimizer / scheduler / best_metric`，脚本自动从保存的 epoch 继续，无需手动改 `--epochs`；
+- `latest.pth` 每 epoch 覆盖保存（磁盘占用最小），`fusion_best.pth` 为验证集 loss 最优，`fusion_epochNNN.pth` 为周期快照；
+- 恢复后调度器（CosineAnnealing）从断点处继续，学习率不重置。
 
 ## 9. 轻量化微调（基于融合模型权重）
 
@@ -126,8 +154,21 @@ python detection/finetune_lightweight.py \
     --yolov8_ckpt weights/yolov8n.pt
 ```
 
-- **预期**：20 epoch 微调完成，权重存 `results/ablation/04_fusion_lightweight/`；记录参数量与 mAP。
+- **预期**：20 epoch 微调完成，权重存 `results/ablation/04_fusion_lightweight/`（`latest.pth` / `lightweight_best.pth` / 每 10 epoch 的 `lightweight_epochNNN.pth`）；记录参数量与 mAP。
 - **失败**：加载融合权重维度不匹配（轻量化头通道 256→128）→ 确认 `resume` 指向的是**融合模型**而非轻量化模型；OOM → §4。
+
+**断点续训（注意与教师权重区分）**：
+
+```bash
+# --resume 始终传「融合模型教师权重」；--resume_train 传轻量化训练自身断点
+python detection/finetune_lightweight.py \
+    --config configs/ablation/04_fusion_lightweight.yaml \
+    --resume results/ablation/02_fusion_concat/fusion_epoch060.pth \
+    --resume_train results/ablation/04_fusion_lightweight/latest.pth \
+    --device cuda \
+    --votenet_ckpt weights/votenet_checkpoint.tar \
+    --yolov8_ckpt weights/yolov8n.pt
+```
 
 ## 10. 消融实验（五组依次跑）
 
