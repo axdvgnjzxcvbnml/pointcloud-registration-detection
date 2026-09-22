@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-step() { echo ""; echo "===== $1 ====="; }
+step() { echo ""; echo "===== $1 =====" }
 ok()   { echo "  [OK] $1"; }
 fail() { echo "  [FAIL] $1"; exit 1; }
 
@@ -66,6 +66,7 @@ if pairs:
         print("  已生成对比图：", pr["pair_id"])
 PY
 else
+  warn_no_pairs=1
   echo "  [WARN] 无帧对清单，跳过对比图（先跑 v100_step2/3）"
 fi
 ok "results/vis/*_compare.png"
