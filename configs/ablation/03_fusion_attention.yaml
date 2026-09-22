@@ -1,0 +1,45 @@
+# ============================================================
+# 消融实验 4：融合-Attention（Cross-Attention 消融对比）
+# ------------------------------------------------------------
+# 继承 configs/default.yaml（base），仅覆盖差异字段。
+# 双分支开启，融合方式为 Cross-Attention
+# （query=点云种子特征, key/value=图像特征），与 Concat 对比。
+#
+# 运行：
+#   python detection/train_fusion.py --config configs/ablation/03_fusion_attention.yaml
+# ============================================================
+base: ../default.yaml
+
+# ---------- 模型开关 ----------
+ablation:
+  mode: fusion_attention        # 实验标识：融合-Attention
+  use_point_branch: true
+  use_image_branch: true
+  pseudo3d: false
+
+lightweight:
+  enabled: false
+
+# ---------- 数据路径（继承 base 默认；结果目录指向本实验） ----------
+data:
+  results_dir: results/ablation/03_fusion_attention
+
+# ---------- 训练超参 ----------
+detection:
+  fusion:
+    method: attention           # 消融对比：Cross-Attention 融合
+    attn_num_heads: 8
+    head_hidden_dim: 256
+    head_dropout: 0.3
+  train:
+    epochs: 60                  # 与 Concat 主融合同轮数，保证公平对比
+    batch_size: 8
+    lr: 0.001
+    freeze_backbone: true
+
+# ---------- 评测指标 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true
+  report_speed: true

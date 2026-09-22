@@ -1,0 +1,44 @@
+# ============================================================
+# 消融实验 3：融合-Concat（主融合）
+# ------------------------------------------------------------
+# 继承 configs/default.yaml（base），仅覆盖差异字段。
+# 双分支开启，融合方式为 Concat + 1×1 Conv（主融合方案）。
+#
+# 运行：
+#   python detection/train_fusion.py --config configs/ablation/02_fusion_concat.yaml
+# ============================================================
+base: ../default.yaml
+
+# ---------- 模型开关 ----------
+ablation:
+  mode: fusion_concat           # 实验标识：融合-Concat（主融合）
+  use_point_branch: true        # 点云分支开启
+  use_image_branch: true        # 图像分支开启
+  pseudo3d: false
+
+lightweight:
+  enabled: false                # 非轻量化（对比实验 5）
+
+# ---------- 数据路径（继承 base 默认；结果目录指向本实验） ----------
+data:
+  results_dir: results/ablation/02_fusion_concat
+
+# ---------- 训练超参 ----------
+detection:
+  fusion:
+    method: concat              # 主融合：特征拼接 + 1×1 投影
+    concat_out_dim: 256         # 128（点云）+ 128（图像）
+    head_hidden_dim: 256
+    head_dropout: 0.3
+  train:
+    epochs: 60
+    batch_size: 8
+    lr: 0.001
+    freeze_backbone: true
+
+# ---------- 评测指标 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true
+  report_speed: true

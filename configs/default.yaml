@@ -1,0 +1,156 @@
+# ============================================================
+# 全局默认配置模板（第一批输出）
+# ------------------------------------------------------------
+# 覆盖内容：数据路径 / 预处理参数 / 配准参数 / 检测训练超参 /
+#           融合方式开关 / 轻量化开关 / 评测参数
+#
+# 用法示例：
+#   python detection/train_fusion.py --config configs/default.yaml
+#   python detection/evaluate_detection.py --config configs/default.yaml
+#
+# 说明：
+#   - 除特殊标注外，路径均相对项目根目录（与 README 同级）。
+#   - 本文件为模板，所有路径/超参均为占位，请按服务器实际环境修改。
+#   - 消融实验配置见 configs/ablation/（第五批输出），覆盖本文件字段。
+# ============================================================
+
+# ---------- 0. 基础信息 ----------
+project_name: pointcloud_registration_detection
+seed: 2024
+device: cuda:0                     # 检测训练用 GPU（单卡 V100）；配准模块为纯 CPU，不依赖 GPU
+
+# ---------- 0.5 消融实验开关（第五批） ----------
+# 五组消融配置位于 configs/ablation/，以 `base: ../default.yaml` 继承本文件，
+# 通过覆盖以下字段切换模型结构：
+#   ablation.mode                  实验标识（供日志/报告使用）
+#   ablation.use_point_branch      点云分支（VoteNet）开关
+#   ablation.use_image_branch      图像分支（YOLOv8 + 投影采样）开关
+#   ablation.pseudo3d              伪 3D：图像特征作为点特征（单 RGB 实验）
+#   detection.fusion.method        concat（主融合）/ attention（消融对比）
+#   lightweight.enabled            轻量化头（DSConv1d，通道 256->128）
+# 训练脚本读取方式：train_fusion.FusionModel.forward 按 use_*_branch 开关
+# 关闭对应分支；lightweight 由 finetune_lightweight.py 消费。
+ablation:
+  mode: fusion_concat              # 默认主融合；各消融实验见 configs/ablation/
+  use_point_branch: true
+  use_image_branch: true
+  pseudo3d: false
+
+# ---------- 1. 数据路径 ----------
+data:
+  data_root: data                  # 数据根目录（软链接，见 data/README.md）
+  sunrgbd_dir: data/SUNRGBD        # SUN RGB-D 原始数据
+  toolbox_dir: data/SUNRGBDtoolbox # 官方工具箱（标注解析用）
+  sun3d_dir: data/SUN3D            # SUN3D 序列（帧间拼接用）
+
+  # 预处理产物输出目录（第二批脚本生成）
+  preprocess_dir: results/preprocess
+  pcd_dir: results/preprocess/pcd              # 每帧点云（.ply / .npy）
+  pair_dir: results/preprocess/pairs           # 帧对清单（json）
+  pose_gt_dir: results/preprocess/pose_gt      # 6DOF 真值 T_AB（npy / txt）
+  detection_data_dir: results/preprocess/detection  # VoteNet 训练数据
+
+  # 权重路径
+  weights_dir: weights
+  votenet_ckpt: weights/votenet_sunrgbd.pth    # VoteNet 官方预训练权重
+  yolov8_ckpt: yolov8n.pt                      # YOLOv8n COCO 预训练（首次运行自动下载）
+
+  # 结果输出
+  results_dir: results
+
+# ---------- 2. 预处理参数 ----------
+preprocess:
+  # 深度图 -> 点云
+  depth_scale: 10000.0       # SUN RGB-D 深度为 16bit 毫米值，除以 10000 得米（上限 10m）
+  depth_trunc: 8.0           # 最大有效深度（米），超出截断（过滤异常值）
+  max_points_per_frame: 200000  # 单帧点云点数上限（内存保护，超出随机采样）
+
+  # 帧对采样（SUN3D 序列）
+  pair_intervals: [5, 10, 30]   # 相邻帧间隔（帧数）
+  pair_target_num: 400          # 目标帧对总数（300 ~ 500）
+  pair_overlap_threshold: 0.3   # 可选：按重叠率过滤帧对的下限（0~1）
+
+  # VoteNet 训练数据生成
+  points_per_frame: 50000       # 每帧采样点数
+  num_classes: 10               # SUN RGB-D 目标类别数
+  vote_radius: 0.1              # 投票向量采样半径（米）
+
+# ---------- 3. 点云配准参数（纯 CPU） ----------
+registration:
+  # 点云预处理
+  voxel_size: 0.02              # 体素下采样尺寸（米）
+  nb_neighbors: 20              # 统计离群点去除的 K 近邻
+  std_ratio: 2.0                # 离群点去除标准差倍数
+  normal_radius: 0.1            # 法向量估计搜索半径（米）
+
+  # 粗配准：FPFH + RANSAC
+  fpfh_radius: 0.25             # FPFH 特征描述子搜索半径（米）
+  ransac_max_iteration: 100000  # RANSAC 迭代次数
+  ransac_distance_threshold: 0.03   # 距离阈值 = 1.5 × voxel_size
+  ransac_confidence: 0.999      # RANSAC 置信度
+
+  # 精配准：改进 ICP（点到平面 + 自适应阈值 + 早停）
+  icp_max_iteration: 50
+  icp_adaptive_threshold: true  # 自适应距离阈值开关
+  icp_threshold_min: 0.02       # 距离阈值下限（米）
+  icp_threshold_factor: 0.5     # 每次迭代阈值 = max(0.02, 0.5 × 上次 RMSE)
+  icp_early_stop_fitness: 1e-6  # 相对 fitness 变化 < 1e-6 时早停
+
+  # 评测
+  eval_rmse_threshold: 0.05         # 配准成功判定：对齐后 RMSE 阈值（米）
+  eval_rotation_threshold: 5.0      # 旋转角误差阈值（度）
+  eval_translation_threshold: 0.05  # 平移误差阈值（米）
+
+# ---------- 4. 三维目标检测 ----------
+detection:
+  # 输入 / 特征
+  image_size: 640               # YOLOv8 输入 resize 尺寸（640×640）
+  feature_stride: 8             # 取 P3 层（stride=8）
+  feature_channels: 64          # P3 层输出通道数
+  projected_channels: 128       # 1×1 Conv 升维后的特征通道数
+  votenet_feature_dim: 128      # VoteNet 种子点特征维度（与图像特征对齐）
+
+  # 融合方式
+  fusion:
+    method: concat              # concat（主融合）| attention（消融对比）
+    concat_out_dim: 256         # Concat 融合输出通道（128 + 128）
+    attn_num_heads: 8           # Cross-Attention 头数
+    head_hidden_dim: 256        # 融合头隐藏层维度
+    head_dropout: 0.3           # 融合头 Dropout
+
+  # 检测头
+  detect_head:
+    num_classes: 10             # 类别数（与 preprocess.num_classes 一致）
+    vote_num: 10                # 每个种子点投票数（VoteNet 默认）
+    proposal_num: 256           # 候选框数量
+    objectness_threshold: 0.5   # 目标性阈值
+
+  # 训练超参
+  train:
+    epochs: 60                  # 融合模型训练轮数（冻结主干）
+    finetune_epochs: 20         # 轻量化微调轮数
+    batch_size: 8               # 单卡 V100 建议值，OOM 时下调至 4 / 2
+    lr: 0.001
+    lr_scheduler: cosine        # cosine | step | none
+    weight_decay: 0.0001
+    freeze_backbone: true       # 冻结 VoteNet 与 YOLOv8n 主干，只训练融合头 + 检测头
+    checkpoint_interval: 10     # 每 N 个 epoch 保存一次权重
+    num_workers: 4              # DataLoader 线程数
+    prefetch_factor: 2
+
+# ---------- 5. 轻量化开关 ----------
+lightweight:
+  enabled: false                # true=启用轻量化头（消融实验 5）
+  hidden_dim: 128               # 通道数减半（256 -> 128）
+  use_dsconv: true              # 用深度可分离 1D 卷积（DSConv1d）替换 Conv1d
+  use_dropout: true             # 添加 Dropout
+  dropout: 0.3
+
+# ---------- 6. 评测参数 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]   # 3D IoU 口径
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true     # 统计参数量与 FLOPs
+  report_speed: true            # 统计推理速度（ms/帧）
+  warmup_iters: 10              # 测速预热次数
+  test_iters: 50                # 测速统计次数

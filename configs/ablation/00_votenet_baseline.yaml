@@ -1,0 +1,44 @@
+# ============================================================
+# 消融实验 1：单点云分支（VoteNet 基线）
+# ------------------------------------------------------------
+# 继承 configs/default.yaml（base），仅覆盖差异字段。
+# 模型开关：图像分支关闭 → 纯点云（VoteNet）检测。
+#
+# 运行：
+#   python detection/train_fusion.py --config configs/ablation/00_votenet_baseline.yaml
+#   python detection/evaluate_detection.py \
+#       --config configs/ablation/00_votenet_baseline.yaml \
+#       --ckpt results/ablation/00_votenet_baseline/fusion_epoch060.pth
+# ============================================================
+base: ../default.yaml
+
+# ---------- 模型开关 ----------
+ablation:
+  mode: votenet_baseline        # 实验标识：单点云分支
+  use_point_branch: true        # 点云分支（VoteNet 主干）开启
+  use_image_branch: false       # 图像分支（YOLOv8+投影）关闭
+  pseudo3d: false
+
+lightweight:
+  enabled: false                # 不使用轻量化头
+
+# ---------- 数据路径（继承 base 默认；结果目录指向本实验） ----------
+data:
+  results_dir: results/ablation/00_votenet_baseline
+
+# ---------- 训练超参 ----------
+detection:
+  fusion:
+    method: concat              # 图像特征置零后走 concat（等效单点云投影）
+  train:
+    epochs: 60                  # 与主融合一致，保证可比
+    batch_size: 8
+    lr: 0.001
+    freeze_backbone: true
+
+# ---------- 评测指标 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]   # 3D IoU 口径
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true
+  report_speed: true

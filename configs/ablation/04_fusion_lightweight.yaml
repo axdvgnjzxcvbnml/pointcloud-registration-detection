@@ -1,0 +1,56 @@
+# ============================================================
+# 消融实验 5：融合 + 轻量化（DSConv1d 头，通道 256→128）
+# ------------------------------------------------------------
+# 继承 configs/default.yaml（base），仅覆盖差异字段。
+# 双分支 Concat 融合 + 轻量化头：
+#   - DSConv1d 替换 Conv1d（深度可分离 1D 卷积）
+#   - 通道数 256 -> 128
+#   - Dropout(0.3)
+#
+# 训练流程（两阶段）：
+#   1) 先用主融合配置训练 60 epoch 得到教师权重：
+#        python detection/train_fusion.py --config configs/ablation/02_fusion_concat.yaml
+#   2) 轻量化头基于其权重微调 20 epoch：
+#        python detection/finetune_lightweight.py \
+#            --config configs/ablation/04_fusion_lightweight.yaml \
+#            --resume results/ablation/02_fusion_concat/fusion_epoch060.pth
+# ============================================================
+base: ../default.yaml
+
+# ---------- 模型开关 ----------
+ablation:
+  mode: fusion_lightweight      # 实验标识：融合+轻量化
+  use_point_branch: true
+  use_image_branch: true
+  pseudo3d: false
+
+lightweight:
+  enabled: true                 # 轻量化头开关
+  hidden_dim: 128               # 通道数减半（256 -> 128）
+  use_dsconv: true              # 深度可分离 1D 卷积
+  use_dropout: true
+  dropout: 0.3
+
+# ---------- 数据路径（继承 base 默认；结果目录指向本实验） ----------
+data:
+  results_dir: results/ablation/04_fusion_lightweight
+
+# ---------- 训练超参 ----------
+detection:
+  fusion:
+    method: concat              # 主融合（Concat）
+    head_hidden_dim: 256
+    head_dropout: 0.3
+  train:
+    epochs: 60                  # 阶段 1 主融合轮数（见顶部说明）
+    finetune_epochs: 20         # 阶段 2 轻量化微调轮数
+    batch_size: 8
+    lr: 0.001
+    freeze_backbone: true
+
+# ---------- 评测指标 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true     # 重点对比参数量/FLOPs（轻量化收益）
+  report_speed: true

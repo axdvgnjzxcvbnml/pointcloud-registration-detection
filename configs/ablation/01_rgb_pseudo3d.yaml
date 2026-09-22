@@ -1,0 +1,43 @@
+# ============================================================
+# 消融实验 2：单 RGB 分支（YOLOv8 + 深度反投影伪 3D）
+# ------------------------------------------------------------
+# 继承 configs/default.yaml（base），仅覆盖差异字段。
+# 模型开关：点云分支（VoteNet）关闭，图像分支开启；
+# 伪 3D：以输入点云（深度反投影）为种子，图像特征经投影采样后
+# 直接作为点特征送入检测头（train_fusion.FusionModel.forward 已支持）。
+#
+# 运行：
+#   python detection/train_fusion.py --config configs/ablation/01_rgb_pseudo3d.yaml
+# ============================================================
+base: ../default.yaml
+
+# ---------- 模型开关 ----------
+ablation:
+  mode: rgb_pseudo3d            # 实验标识：单 RGB（伪 3D）
+  use_point_branch: false       # 点云分支（VoteNet）关闭
+  use_image_branch: true        # 图像分支（YOLOv8 + 投影）开启
+  pseudo3d: true                # 图像特征作为伪 3D 点特征
+
+lightweight:
+  enabled: false
+
+# ---------- 数据路径（继承 base 默认；结果目录指向本实验） ----------
+data:
+  results_dir: results/ablation/01_rgb_pseudo3d
+
+# ---------- 训练超参 ----------
+detection:
+  fusion:
+    method: concat              # 伪 3D 下点/图特征相同，投影层起特征变换作用
+  train:
+    epochs: 60
+    batch_size: 8
+    lr: 0.001
+    freeze_backbone: true
+
+# ---------- 评测指标 ----------
+evaluate:
+  iou_thresholds: [0.25, 0.5]
+  classes: [bathtub, bed, bookshelf, chair, desk, dresser, night_stand, sofa, table, toilet]
+  report_params_flops: true
+  report_speed: true
