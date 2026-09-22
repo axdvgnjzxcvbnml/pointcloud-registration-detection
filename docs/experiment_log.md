@@ -106,10 +106,14 @@ Git 提交   ：（如使用版本管理，记录 commit hash）
 | 04 融合+轻量化 | TBD | TBD | TBD | TBD | TBD | （未跑） |
 <!-- ABLATION-REPORT:END -->
 
+### 1.4 V100 上线前准备完成（2026-09-22）
 
-
-
-
+- **状态**：V100 上线前准备完成，CI 全绿，本地与远端一致。
+- **内容**：
+  1. 12 个文件（V100 准备轮全部产物）已按两条 commit 推送到 `axdvgnjzxcvbnml/pointcloud-registration-detection`（main），内容与本地逐字节校验一致；
+  2. CI 三个 job（syntax-check / env-check / smoke，均不依赖 GPU/数据集）通过；
+  3. 数据完整性检查（`scripts/check_data.sh`）、配准超参扫描（`scripts/sweep_registration.py`，结论见 `configs/default.yaml`）、断点续训（`train_fusion.py --resume` / `finetune_lightweight.py --resume_train`）、消融一键报告（`scripts/ablation_report.py`）、排坑手册（`docs/v100_pitfalls.md`）均已在 CPU 侧完成并验证。
+- **待办（仅剩 GPU 侧）**：V100 上按 `docs/v100_checklist.md` 顺序执行，跑完五组消融后用 `scripts/ablation_report.py` 生成对比表回填上方 §1.3。
 
 ## 2. 单条实验详细记录模板
 

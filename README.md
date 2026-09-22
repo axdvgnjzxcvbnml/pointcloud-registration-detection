@@ -35,7 +35,12 @@
 - [x] **8 个 V100 一键脚本**：参数已调好、前置检查/日志/收尾齐全（`scripts/v100_step1~8.sh`）
 - [x] **消融配置**：五组配置注释「跑完应得到什么结果」+ 对比关系 README
 - [x] **真值管线**：`preprocess/extract_gt.py`（官方标注 → `data/gt/gt.json`）+ `detection/load_gt.py` + mAP 单测
-- [x] **CI**：push 自动跑语法检查 + 无数据集/无 GPU 冒烟 + 环境检查（`.github/workflows/ci.yml`）
+- [x] **CI**：push 自动跑语法检查 + 无数据集/无 GPU 冒烟 + 环境检查（`.github/workflows/ci.yml`），三个 job 全绿
+- [x] **数据完整性检查**：`scripts/check_data.sh`（场景三件套/文件数量一致/空文件与损坏文件检测），真实 studyroom 数据实测通过
+- [x] **配准超参扫描**：`scripts/sweep_registration.py` 27 组合（RANSAC 100k/300k/500k × FPFH 0.15/0.25/0.35 × voxel 0.02/0.05/0.08）模拟数据全部 100% 成功，最优组合已写入 `configs/default.yaml`
+- [x] **断点续训**：`detection/train_fusion.py --resume` 与 `detection/finetune_lightweight.py --resume_train`（checkpoint 含 epoch/模型/优化器/调度器/best 指标），单测通过
+- [x] **消融一键报告**：`scripts/ablation_report.py` 读取五组配置结果生成 Markdown 对比表（写入 `docs/experiment_log.md` §1.3）+ 柱状图（`results/figures/ablation.png`），未跑实验自动留 TBD
+- [x] **V100 排坑手册**：`docs/v100_pitfalls.md`（10 个坑：PointNet2 编译/CUDA 版本/软链失效/OOM/断点续训格式/消融字段/YOLOv8n 版本/Open3D 渲染/权重加载/mAP 口径，每坑含症状·原因·方案·文档指针）
 
 
 ## 1. 项目简介
