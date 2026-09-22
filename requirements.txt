@@ -1,16 +1,41 @@
-# Python 3.8 / CUDA 11.7 / PyTorch 1.13.1（cu117）配套依赖
-# 安装顺序：先装 torch/torchvision（官方 cu117 index），再 pip install -r requirements.txt
+# ============================================================
+# 基于深度相机的物体点云拼接与目标检测 —— 依赖清单
+# 目标环境：Python 3.8 / CUDA 11.7 / 单卡 V100
+#
+# 安装顺序（重要）：
+#   1) 先安装 PyTorch（cu117 版 wheel，见 README 与 docs/setup.md）：
+#        pip install torch==1.13.1 torchvision==0.14.1 \
+#            --index-url https://download.pytorch.org/whl/cu117
+#   2) 再执行：pip install -r requirements.txt
+#      （已满足的版本 pip 会自动跳过，不会覆盖 cu117 的 torch）
+# ============================================================
 
-numpy==1.24.4
-scipy>=1.9,<1.11
-open3d==0.17.0
-pillow>=10.0
-PyYAML>=6.0
-opencv-python>=4.8
-ultralytics==8.2.*
+# ---------- 深度学习框架（PyTorch 1.13.1 + CUDA 11.7） ----------
+torch==1.13.1
+torchvision==0.14.1
 
-# 可选（评测 / 训练增强 / 演示导出）：
-# thop
-# tensorboardX
-# imageio
-# imageio-ffmpeg
+# ---------- 目标检测（YOLOv8n） ----------
+ultralytics>=8.2.0,<8.3.0        # 8.2.x 系列
+opencv-python-headless>=4.8.0    # letterbox/图像读写（headless 版，无 GUI 依赖；ultralytics 也会传递安装）
+
+# ---------- 点云处理 ----------
+open3d==0.17.0                    # 点云 IO / FPFH / RANSAC / ICP
+plyfile>=0.7.4                    # PLY 文件读写（VoteNet 数据格式）
+
+# ---------- 基础科学计算 ----------
+numpy==1.24.4                     # 兼容 Python 3.8 与 PyTorch 1.13
+scipy>=1.9,<1.11                  # 矩阵/数值运算（registration 模块）
+PyYAML>=6.0                       # 配置解析（configs/*.yaml）
+easydict>=1.10                    # VoteNet 官方配置（EasyDict）兼容
+
+# ---------- 训练 / 日志 / 可视化 ----------
+tensorboardX>=2.6                 # 训练曲线记录
+tensorboard>=2.13                 # 日志服务
+matplotlib>=3.6,<3.8              # 结果曲线与可视化
+tqdm>=4.66                        # 进度条
+Pillow>=10.0                      # 图像 IO（YOLOv8 依赖）
+imageio>=2.31                     # GIF/视频导出（app/export_demo.py）
+imageio-ffmpeg>=0.4.9             # MP4 编码器（imageio 后端）
+
+# ---------- 编译相关（PointNet2 CUDA 算子） ----------
+ninja                             # 加速 cpp_extension 编译
