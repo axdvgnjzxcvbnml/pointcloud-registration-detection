@@ -1,5 +1,9 @@
 # 基于深度相机的物体点云拼接与目标检测
 
+![CI](https://img.shields.io/github/actions/workflow/status/axdvgnjzxcvbnml/pointcloud-registration-detection/ci.yml?branch=main&label=CI&logo=github)
+![Python](https://img.shields.io/badge/Python-3.8-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 面向室内场景（SUN RGB-D 数据集）的「RGB-D 点云拼接 + 三维目标检测」工程骨架与文档模板。
 
 ## 1. 项目简介
@@ -111,7 +115,68 @@ bash scripts/run_smoke.sh
 bash scripts/run_smoke.sh --ci
 ```
 
-### 4.5 训练与评测
+### 4.5 模拟数据快速体验（无数据集也能跑通全流程）
+
+不依赖 SUN RGB-D 真实数据，用 5 帧模拟 SUN3D 场景（`scripts/make_simulated_scene.py` 生成；深度图为 uint16、位姿为 3×4 矩阵，格式贴近真实数据）即可在纯 CPU 环境跑通全部拼接链路：
+
+```bash
+# 1) 生成模拟场景（5 帧，帧号 0/5/10/15/20，含 image/depth/extrinsics/intrinsics/clouds）
+python scripts/make_simulated_scene.py --scene_dir data/SUN3D/sim_scene_001
+
+# 2) 深度图 → 点云（5 帧，输出 results/preprocess/pcd/sim_scene_001_*.ply）
+for f in 000000 000005 000010 000015 000020; do
+  python preprocess/depth_to_pointcloud.py \
+      --depth data/SUN3D/sim_scene_001/depth/frame-$f.depth.png \
+      --K data/SUN3D/sim_scene_001/intrinsics/frame-$f.txt \
+      --out_path results/preprocess/pcd/sim_scene_001_$f --out_format ply
+done
+
+# 3) 帧对采样 + 6DOF 真值
+python preprocess/sample_frame_pairs.py --sun3d_dir data/SUN3D \
+    --scene_list sim_scene_001 --intervals 5,10,30 --target_num 20 \
+    --out_path results/preprocess/pairs/pairs.json
+python preprocess/compute_pose_gt.py --pairs results/preprocess/pairs/pairs.json \
+    --sun3d_dir data/SUN3D --out_dir results/preprocess/pose_gt
+
+# 4) 配准链路：预处理 → 粗配准 → 精配准（以帧 0→5 为例）
+python registration/preprocess_pointcloud.py \
+    --input results/preprocess/pcd/sim_scene_001_000000.ply \
+    --output results/registration/sim_scene_001_000000_clean.ply
+python registration/coarse_registration.py \
+    --source results/preprocess/pcd/sim_scene_001_000000.ply \
+    --target results/preprocess/pcd/sim_scene_001_000005.ply \
+    --output results/registration/sim_000000_000005_coarse.txt
+python registration/fine_registration.py \
+    --source results/preprocess/pcd/sim_scene_001_000000.ply \
+    --target results/preprocess/pcd/sim_scene_001_000005.ply \
+    --init results/registration/sim_000000_000005_coarse.txt \
+    --output results/registration/sim_000000_000005_fine.txt
+
+# 5) 评测（7 对 × 4 方法）与可视化
+python registration/evaluate_registration.py \
+    --pairs results/preprocess/pairs/pairs.json \
+    --pcd_dir results/preprocess/pcd \
+    --pose_gt_dir results/preprocess/pose_gt \
+    --out_dir results/registration/eval
+python registration/visualize_registration.py \
+    --source results/preprocess/pcd/sim_scene_001_000000.ply \
+    --target results/preprocess/pcd/sim_scene_001_000005.ply \
+    --transform results/registration/sim_000000_000005_fine.txt \
+    --out_dir results/registration/viz --offscreen
+
+# 6) 可视化集成：场景加载 / 拼接前后对比 / 导出 GIF
+python app/load_scene.py --scene-dir data/SUN3D/sim_scene_001/clouds --out-dir results/vis
+python app/compare_registration.py \
+    --source results/preprocess/pcd/sim_scene_001_000000.ply \
+    --target results/preprocess/pcd/sim_scene_001_000005.ply \
+    --transform results/registration/sim_000000_000005_fine.txt --out-dir results/vis
+python app/export_demo.py --scene-dir data/SUN3D/sim_scene_001/clouds \
+    --out-dir results/demo --n-frames 18 --fps 10 --gif --width 640 --height 360
+```
+
+> 模拟数据评测结果（7 对，Open3D 0.19 / 纯 CPU）：本方案（FPFH+RANSAC+改进 ICP）成功率 100%、RMSE 0.0077m、旋转误差 0.010°、平移误差 0.0004m；详见 `docs/experiment_log.md` 配准表 REG-001~003。
+
+### 4.6 训练与评测
 
 ```bash
 # 数据预处理
