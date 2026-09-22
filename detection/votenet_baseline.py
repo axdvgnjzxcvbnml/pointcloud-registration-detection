@@ -91,8 +91,11 @@ def run_inference(model, data_loader, device="cuda"):
             boxes = data_dict.get("batch_boxes", data_dict.get("boxes"))
             scores = data_dict.get("batch_scores", data_dict.get("scores"))
             labels = data_dict.get("batch_labels", data_dict.get("labels"))
-            if boxes is None:
-                raise KeyError("未在模型输出中找到检测框字段，请核对 external/votenet 输出键名")
+            if boxes is None or scores is None or labels is None:
+                raise KeyError(
+                    "模型输出缺少 batch_boxes/batch_scores/batch_labels 字段，"
+                    "请核对 external/votenet 输出键名（data_dict 现有键: "
+                    f"{list(data_dict.keys())}）")
             for b, s, l in zip(boxes, scores, labels):
                 detections.append({
                     "boxes": b.cpu().numpy(),
@@ -144,22 +147,42 @@ def main():
 
     # 评测：复用 evaluate_detection.py 的 mAP 计算（3D IoU 口径）
     from evaluate_detection import compute_mAP, save_eval_report
-    # TODO: 从检测数据加载真值框（读取 npz 的 bboxes/class_ids 字段），示例：
-    #   gts = [{"boxes": ...(K,7), "labels": ...(K,)} for 每帧]
-    #   aps_025, mAP_025 = compute_mAP(detections, gts, iou_th=0.25,
-    #                                  num_classes=args.num_class)
-    #   aps_05, mAP_05 = compute_mAP(detections, gts, iou_th=0.5,
-    #                                num_classes=args.num_class)
-    #   save_eval_report(args.out_dir, {"mAP@0.25": mAP_025, "mAP@0.5": mAP_05,
-    #                                   "AP@0.25": aps_025, "AP@0.5": aps_05})
-    raise NotImplementedError(
-        "请接入真值加载（读取 npz 的 bboxes/class_ids 字段）后调用 compute_mAP，"
-        "示例见 evaluate_detection.py 的 main()")
 
-    # aps_025, mAP_025 = compute_mAP(detections, gts, iou_th=0.25, num_classes=args.num_class)
-    # aps_05, mAP_05 = compute_mAP(detections, gts, iou_th=0.5, num_classes=args.num_class)
-    # save_eval_report(args.out_dir, {"mAP@0.25": mAP_025, "mAP@0.5": mAP_05,
-    #                                 "AP@0.25": aps_025, "AP@0.5": aps_05})
+    # ================================================================
+    # TODO（真值接入，V100 上跑真实数据时完成；当前为骨架占位）
+    # ----------------------------------------------------------------
+    # 1) 真值来源：
+    #    generate_detection_data.py 为每帧导出一个 npz（位于
+    #    results/preprocess/detection/<frame_name>.npz），其中：
+    #      - "bboxes"    : (K, 7)，K 个真值框，每行
+    #                      [cx, cy, cz, length, width, height, heading]
+    #      - "class_ids" : (K,)，类别 id（0~9，类别表见
+    #                      evaluate_detection.SUNRGBD_CLASSES）
+    #    验证集帧名来自 split.json 的 split["val"]（元素含 "name"）。
+    #
+    # 2) 真值加载（每帧一个 dict，顺序与 run_inference 输出一致）：
+    #      gts = []
+    #      for name in val_names:
+    #          d = np.load(os.path.join(args.det_data_dir, name + ".npz"))
+    #          gts.append({"boxes": d["bboxes"], "labels": d["class_ids"]})
+    #
+    # 3) 预测对齐：
+    #    run_inference 已按 DataLoader 顺序（shuffle=False）逐帧输出
+    #    {"boxes"(M,7), "scores"(M,), "labels"(M,)}，与 gts 逐帧一一对应；
+    #    注意预测框为 (cx,cy,cz,l,w,h,heading)，与真值 7 字段口径相同，
+    #    可直接送入 compute_mAP（内部 boxes_to_corners_3d 统一转 8 角点）。
+    #
+    # 4) 计算与落盘：
+    #      aps_025, mAP_025 = compute_mAP(detections, gts, 0.25, args.num_class)
+    #      aps_05,  mAP_05  = compute_mAP(detections, gts, 0.5,  args.num_class)
+    #      save_eval_report(args.out_dir, {
+    #          "mAP@0.25": mAP_025, "mAP@0.5": mAP_05,
+    #          "AP@0.25": aps_025, "AP@0.5": aps_05})
+    # ================================================================
+    raise NotImplementedError(
+        "真值加载尚未接入：请按上方 TODO 从检测数据 npz 读取 "
+        "bboxes/class_ids 构建 gts，再调用 compute_mAP；"
+        "参考 evaluate_detection.py 的 main()。")
 
 
 if __name__ == "__main__":
