@@ -103,7 +103,7 @@ def box3d_iou(box_a, box_b):
                                _poly_corners(cx2, cy2, l2, w2, hd2))
     inter2d = _poly_area(inter_poly)
     z_overlap = max(0.0, min(cz1 + h1 / 2, cz2 + h2 / 2)
-                    - max(cz1 - h1 / 2, cz2 - h2 / 2))
+                    - max(cz1 - h1 / 2, cz2 - h1 / 2))
     inter = inter2d * z_overlap
     vol1, vol2 = l1 * w1 * h1, l2 * w2 * h2
     union = vol1 + vol2 - inter
@@ -313,7 +313,9 @@ def main():
     with open(Path(args.det_data_dir) / "split.json", "r", encoding="utf-8") as f:
         split = json.load(f)
     val_names = [s["name"] for s in split["val"]]
-    dataset = SunRGBDDataset(args.det_data_dir, args.frames_dir, val_names)
+    use_image_branch = cfg.get("ablation", {}).get("use_image_branch", True)
+    dataset = SunRGBDDataset(args.det_data_dir, args.frames_dir, val_names,
+                             use_image_branch=use_image_branch)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False,
                         num_workers=4)
 
