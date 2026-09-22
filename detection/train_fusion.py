@@ -368,8 +368,61 @@ def compute_loss(pred, batch, vote_num=10, num_classes=10):
 # ---------------------------------------------------------------
 # 训练主流程
 # ---------------------------------------------------------------
+def _load_state(model, state):
+    """把 checkpoint 中的分模块状态恢复到模型（按形状过滤，缺失报警）。
+
+    形状过滤保证兼容轻量化微调产出的 checkpoint（头部通道 256->128 的
+    键会被跳过而不是抛 RuntimeError）。
+    """
+    def _load(name, module, key):
+        if key not in state:
+            logger.warning("checkpoint 缺少 %s 状态，跳过", key)
+            return
+        cur = module.state_dict()
+        fit = {k: v for k, v in state[key].items()
+               if k in cur and cur[k].shape == v.shape}
+        missing, _ = module.load_state_dict(fit, strict=False)
+        if missing:
+            logger.warning("%s 恢复时缺失 %d 个键（首5: %s）",
+                           name, len(missing), missing[:5])
+
+    _load("VoteNet主干", model.votebackbone, "votebackbone")
+    _load("YOLO投影", model.yolo_feat.proj_conv, "yolo_proj_conv")
+    _load("融合头", model.fusion_head, "fusion_head")
+    _load("检测头", model.det_head, "det_head")
+
+
+def _save_ckpt(out_dir, name, model, optimizer, scheduler, cfg, epoch,
+               best_metric):
+    """保存断点 checkpoint（模型 / 优化器 / 调度器 / epoch / best 指标）。"""
+    torch.save({
+        "epoch": epoch,
+        "cfg": cfg,
+        "model": _collect_state(model),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler else None,
+        "best_metric": best_metric,
+    }, Path(out_dir) / name)
+
+
+def _run_validation(model, val_loader, det_cfg, device):
+    """跑一遍验证集，返回平均总损失（断点续训用 best 指标）。"""
+    model.eval()
+    total, n = 0.0, 0
+    with torch.no_grad():
+        for batch in val_loader:
+            pred = model(batch, device=device)
+            ld = compute_loss(pred, batch,
+                              det_cfg["detect_head"]["vote_num"],
+                              det_cfg["detect_head"]["num_classes"])
+            total += float(ld["total"]) * len(batch["point_cloud"])
+            n += len(batch["point_cloud"])
+    model.train()
+    return total / max(n, 1)
+
+
 def train_fusion(cfg, det_data_dir, frames_dir, out_dir,
-                 votenet_ckpt, yolov8_ckpt, device="cuda"):
+                 votenet_ckpt, yolov8_ckpt, device="cuda", resume_ckpt=None):
     det_cfg = cfg["detection"]
     train_cfg = det_cfg["train"]
     out_dir = Path(out_dir)
@@ -414,7 +467,30 @@ def train_fusion(cfg, det_data_dir, frames_dir, out_dir,
     except ImportError:
         writer = None
 
-    for epoch in range(1, train_cfg["epochs"] + 1):
+    # ---- 断点续训 ----
+    start_epoch = 1
+    best_metric = float("inf")
+    if resume_ckpt:
+        if not Path(resume_ckpt).is_file():
+            raise FileNotFoundError(f"断点文件不存在: {resume_ckpt}")
+        ckpt = torch.load(resume_ckpt, map_location="cpu")
+        _load_state(model, ckpt.get("model", ckpt))
+        if "optimizer" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        if ckpt.get("scheduler") is not None:
+            try:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            except Exception as e:  # 版本差异等，调度器从头开始不影响主流程
+                logger.warning("调度器状态恢复失败，按新周期继续: %s", e)
+        start_epoch = int(ckpt.get("epoch", 0)) + 1
+        best_metric = float(ckpt.get("best_metric", float("inf")))
+        logger.info("从断点恢复: %s（已训至 epoch %d，best_metric=%.6f）",
+                    resume_ckpt, start_epoch - 1, best_metric)
+        if start_epoch > train_cfg["epochs"]:
+            logger.warning("断点 epoch %d 已超过目标 %d，直接结束",
+                           start_epoch - 1, train_cfg["epochs"])
+
+    for epoch in range(start_epoch, train_cfg["epochs"] + 1):
         model.train()
         t0 = time.time()
         losses = {"total": 0.0}
@@ -440,20 +516,29 @@ def train_fusion(cfg, det_data_dir, frames_dir, out_dir,
             for k, v in losses.items():
                 writer.add_scalar(f"train/{k}", v, epoch)
 
-        # 周期性保存权重
+        # 验证集 loss（断点续训的 best 指标；mAP 由 evaluate_detection.py 评测）
+        val_loss = _run_validation(model, val_loader, det_cfg, device)
+        logger.info("  val loss=%.4f（best=%.4f）", val_loss, best_metric)
+        if writer is not None:
+            writer.add_scalar("val/loss", val_loss, epoch)
+        if val_loss < best_metric:
+            best_metric = val_loss
+            _save_ckpt(out_dir, "fusion_best.pth", model, optimizer, scheduler,
+                       cfg, epoch, best_metric)
+            logger.info("  best 更新 -> %s", out_dir / "fusion_best.pth")
+
+        # 每 epoch 覆盖保存 latest.pth（断点续训用），周期/末尾保留命名权重
+        _save_ckpt(out_dir, "latest.pth", model, optimizer, scheduler,
+                   cfg, epoch, best_metric)
         if epoch % train_cfg["checkpoint_interval"] == 0 or epoch == train_cfg["epochs"]:
-            ckpt = {
-                "epoch": epoch,
-                "cfg": cfg,
-                "model": _collect_state(model),
-                "optimizer": optimizer.state_dict(),
-            }
-            torch.save(ckpt, out_dir / f"fusion_epoch{epoch:03d}.pth")
+            _save_ckpt(out_dir, f"fusion_epoch{epoch:03d}.pth", model,
+                       optimizer, scheduler, cfg, epoch, best_metric)
             logger.info("已保存权重: %s", out_dir / f"fusion_epoch{epoch:03d}.pth")
 
     if writer is not None:
         writer.close()
-    logger.info("训练完成，权重目录: %s", out_dir)
+    logger.info("训练完成，权重目录: %s（断点续训：--resume %s）",
+                out_dir, out_dir / "latest.pth")
 
 
 def _collect_state(model):
@@ -481,6 +566,9 @@ def main():
     parser.add_argument("--yolov8_ckpt", default="yolov8n.pt")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--epochs", type=int, default=None, help="覆盖配置的轮数")
+    parser.add_argument("--resume", default=None,
+                        help="断点 checkpoint（train_fusion 输出的 latest.pth / "
+                             "fusion_epochNNN.pth），从保存的 epoch 继续训练")
     parser.add_argument("--fusion_method", choices=["concat", "attention"],
                         default=None, help="覆盖配置的融合方式")
     parser.add_argument("--verbose", action="store_true", help="调试日志")
@@ -497,7 +585,8 @@ def main():
         cfg["detection"]["fusion"]["method"] = args.fusion_method
 
     train_fusion(cfg, args.det_data_dir, args.frames_dir, args.out_dir,
-                 args.votenet_ckpt, args.yolov8_ckpt, device=args.device)
+                 args.votenet_ckpt, args.yolov8_ckpt, device=args.device,
+                 resume_ckpt=args.resume)
 
 
 if __name__ == "__main__":

@@ -84,8 +84,13 @@ registration:
   normal_radius: 0.1            # 法向量估计搜索半径（米）
 
   # 粗配准：FPFH + RANSAC
+  # （2026-09-22 超参扫描结论，见 docs/experiment_log.md §1.2：
+  #   模拟数据 27 组组合成功率均 100%；voxel=0.02 精度最优（rot≤0.019°），
+  #   voxel=0.08 最快（约 1/3 耗时）但精度差约 4 倍；RANSAC 100k↔500k 在
+  #   易数据上无差异。真实数据（mit_studyroom）失败集中在低内点率帧对，
+  #   §1.1 建议迭代 200k+，故此处取 300000；耗时敏感可回落 100000。）
   fpfh_radius: 0.25             # FPFH 特征描述子搜索半径（米）
-  ransac_max_iteration: 100000  # RANSAC 迭代次数
+  ransac_max_iteration: 300000  # RANSAC 迭代次数（扫描最优区间 100k~500k，取稳健值）
   ransac_distance_threshold: 0.03   # 距离阈值 = 1.5 × voxel_size
   ransac_confidence: 0.999      # RANSAC 置信度
 

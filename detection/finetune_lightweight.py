@@ -17,9 +17,18 @@ finetune_lightweight.py — 轻量化模型微调（第四批交付）
 
 用法
 ----
+    # 首次微调：--resume 传入融合模型（教师）权重
     python detection/finetune_lightweight.py \
         --config configs/default.yaml \
         --resume results/detection/fusion/fusion_epoch060.pth \
+        --det_data_dir results/preprocess/detection \
+        --out_dir results/detection/lightweight
+
+    # 断点续训：--resume_train 传入轻量化训练自身的 checkpoint
+    python detection/finetune_lightweight.py \
+        --config configs/default.yaml \
+        --resume results/detection/fusion/fusion_epoch060.pth \
+        --resume_train results/detection/lightweight/latest.pth \
         --det_data_dir results/preprocess/detection \
         --out_dir results/detection/lightweight
 """
@@ -98,8 +107,33 @@ def load_pretrained(model, ckpt_path, device="cpu"):
     return model
 
 
+def _resume_train_state(model, ckpt_path, optimizer, scheduler, start_key="epoch"):
+    """从轻量化 checkpoint 恢复训练状态（模型/优化器/调度器/epoch）。
+
+    返回 (start_epoch, best_metric)。模型权重按形状过滤加载，兼容
+    train_fusion 产出的 checkpoint（头部形状不同时只迁移可复用层）。
+    """
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    state = ckpt.get("model", ckpt)
+    from train_fusion import _load_state
+    _load_state(model, state)
+    if "optimizer" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer"])
+    if ckpt.get("scheduler") is not None:
+        try:
+            scheduler.load_state_dict(ckpt["scheduler"])
+        except Exception as e:
+            logger.warning("调度器状态恢复失败，按新周期继续: %s", e)
+    start_epoch = int(ckpt.get(start_key, 0)) + 1
+    best_metric = float(ckpt.get("best_metric", float("inf")))
+    logger.info("从断点恢复: %s（已训至 epoch %d，best_metric=%.6f）",
+                ckpt_path, start_epoch - 1, best_metric)
+    return start_epoch, best_metric
+
+
 def finetune_lightweight(cfg, resume_ckpt, det_data_dir, frames_dir,
-                         out_dir, votenet_ckpt, yolov8_ckpt, device="cuda"):
+                         out_dir, votenet_ckpt, yolov8_ckpt, device="cuda",
+                         resume_train=None):
     from train_fusion import (SunRGBDDataset, compute_loss,
                               load_config, _collect_state)
     from torch.utils.data import DataLoader
@@ -121,6 +155,11 @@ def finetune_lightweight(cfg, resume_ckpt, det_data_dir, frames_dir,
                               use_image_branch=use_image_branch)
     train_loader = DataLoader(train_ds, batch_size=train_cfg["batch_size"],
                               shuffle=True, num_workers=train_cfg["num_workers"])
+    val_ds = SunRGBDDataset(det_data_dir, frames_dir,
+                            sample_names=[s["name"] for s in split["val"]],
+                            use_image_branch=use_image_branch)
+    val_loader = DataLoader(val_ds, batch_size=train_cfg["batch_size"],
+                            shuffle=False, num_workers=train_cfg["num_workers"])
 
     model = build_lightweight_model(cfg, votenet_ckpt, yolov8_ckpt,
                                     freeze_backbone=True)
@@ -133,13 +172,24 @@ def finetune_lightweight(cfg, resume_ckpt, det_data_dir, frames_dir,
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=finetune_epochs)
 
+    # ---- 断点续训（--resume_train：轻量化训练自身的 checkpoint） ----
+    start_epoch, best_metric = 1, float("inf")
+    if resume_train:
+        if not Path(resume_train).is_file():
+            raise FileNotFoundError(f"断点文件不存在: {resume_train}")
+        start_epoch, best_metric = _resume_train_state(
+            model, resume_train, optimizer, scheduler)
+        if start_epoch > finetune_epochs:
+            logger.warning("断点 epoch %d 已超过目标 %d，直接结束",
+                           start_epoch - 1, finetune_epochs)
+
     try:
         from tensorboardX import SummaryWriter
         writer = SummaryWriter(log_dir=str(out_dir / "tb"))
     except ImportError:
         writer = None
 
-    for epoch in range(1, finetune_epochs + 1):
+    for epoch in range(start_epoch, finetune_epochs + 1):
         model.train()
         t0 = time.time()
         total_loss = 0.0
@@ -156,20 +206,58 @@ def finetune_lightweight(cfg, resume_ckpt, det_data_dir, frames_dir,
             total_loss += float(loss_dict["total"]) * len(batch["point_cloud"])
             n += len(batch["point_cloud"])
         scheduler.step()
+        epoch_loss = total_loss / max(n, 1)
         logger.info("微调 Epoch %3d/%d | %.1fs | loss=%.4f | lr=%.6f",
                     epoch, finetune_epochs, time.time() - t0,
-                    total_loss / max(n, 1), optimizer.param_groups[0]["lr"])
+                    epoch_loss, optimizer.param_groups[0]["lr"])
         if writer is not None:
-            writer.add_scalar("finetune/loss", total_loss / max(n, 1), epoch)
+            writer.add_scalar("finetune/loss", epoch_loss, epoch)
 
+        # 验证集 loss（best 指标；mAP 由 evaluate_detection.py 评测）
+        val_loss, nv = 0.0, 0
+        model.eval()
+        with torch.no_grad():
+            for batch in val_loader:
+                pred = model(batch, device=device)
+                ld = compute_loss(pred, batch,
+                                  det_cfg["detect_head"]["vote_num"],
+                                  det_cfg["detect_head"]["num_classes"])
+                val_loss += float(ld["total"]) * len(batch["point_cloud"])
+                nv += len(batch["point_cloud"])
+        model.train()
+        val_loss = val_loss / max(nv, 1)
+        logger.info("  val loss=%.4f（best=%.4f）", val_loss, best_metric)
+        if writer is not None:
+            writer.add_scalar("finetune/val_loss", val_loss, epoch)
+        if val_loss < best_metric:
+            best_metric = val_loss
+            torch.save({"epoch": epoch, "cfg": cfg,
+                        "model": _collect_state(model),
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "best_metric": best_metric},
+                       out_dir / "lightweight_best.pth")
+            logger.info("  best 更新 -> %s", out_dir / "lightweight_best.pth")
+
+        # 每 epoch 覆盖 latest.pth（断点续训用），周期/末尾保留命名权重
+        torch.save({"epoch": epoch, "cfg": cfg,
+                    "model": _collect_state(model),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "best_metric": best_metric},
+                   out_dir / "latest.pth")
         if epoch == finetune_epochs or epoch % 10 == 0:
             torch.save({"epoch": epoch, "cfg": cfg,
-                        "model": _collect_state(model)},
+                        "model": _collect_state(model),
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "best_metric": best_metric},
                        out_dir / f"lightweight_epoch{epoch:03d}.pth")
 
     if writer is not None:
         writer.close()
-    logger.info("轻量化微调完成，权重目录: %s", out_dir)
+    logger.info("轻量化微调完成，权重目录: %s（断点续训：--resume_train %s）",
+                out_dir, out_dir / "latest.pth")
 
 
 def main():
@@ -184,6 +272,10 @@ def main():
     parser.add_argument("--yolov8_ckpt", default="yolov8n.pt")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--finetune_epochs", type=int, default=None)
+    parser.add_argument("--resume_train", default=None,
+                        help="轻量化训练断点（finetune_lightweight 输出的 "
+                             "latest.pth / lightweight_epochNNN.pth），"
+                             "从保存的 epoch 继续微调；区别于 --resume（教师权重）")
     parser.add_argument("--verbose", action="store_true", help="调试日志")
     args = parser.parse_args()
 
@@ -198,7 +290,7 @@ def main():
 
     finetune_lightweight(cfg, args.resume, args.det_data_dir, args.frames_dir,
                          args.out_dir, args.votenet_ckpt, args.yolov8_ckpt,
-                         device=args.device)
+                         device=args.device, resume_train=args.resume_train)
 
 
 if __name__ == "__main__":

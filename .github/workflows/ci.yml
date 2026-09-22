@@ -33,7 +33,7 @@ jobs:
 
       - name: compileall 语法检查
         run: |
-          python -m compileall -q preprocess registration detection app \
+          python -m compileall -q preprocess registration detection app scripts \
               && echo "语法检查通过"
 
   env-check:
