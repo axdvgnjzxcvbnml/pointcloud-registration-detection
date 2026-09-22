@@ -18,7 +18,7 @@ train_fusion.py — 融合模型训练（第四批交付）
 ----
     - external/votenet（含编译好的 PointNet2 算子）
     - yolov8n.pt（首次运行自动下载）
-    数据：results/preprocess/detection/*.npz（generate_detection_data.py 输出）
+    - 数据：results/preprocess/detection/*.npz（generate_detection_data.py 输出）
 
 用法
 ----

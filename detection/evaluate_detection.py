@@ -9,7 +9,7 @@ evaluate_detection.py — 检测评测（第四批交付）
       - mAP@0.25 与 mAP@0.5（3D IoU 口径，10 类及均值）
       - 每类 AP 明细
       - 参数量 / FLOPs（可选 thop）/ 推理速度（ms/帧）
-    输出 report.json + 终端表格。
+    输出 report.json（同内容别名 map.json）+ 终端表格。
 
 说明
 ----
@@ -103,7 +103,7 @@ def box3d_iou(box_a, box_b):
                                _poly_corners(cx2, cy2, l2, w2, hd2))
     inter2d = _poly_area(inter_poly)
     z_overlap = max(0.0, min(cz1 + h1 / 2, cz2 + h2 / 2)
-                    - max(cz1 - h1 / 2, cz2 - h1 / 2))
+                    - max(cz1 - h1 / 2, cz2 - h2 / 2))
     inter = inter2d * z_overlap
     vol1, vol2 = l1 * w1 * h1, l2 * w2 * h2
     union = vol1 + vol2 - inter
@@ -244,6 +244,9 @@ def save_eval_report(out_dir, report):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    # 同时写 map.json（v100_step*/ablation 脚本读取的 mAP 汇总别名）
+    with open(out_dir / "map.json", "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
     print("\n========== 检测评测报告 ==========")
