@@ -1,0 +1,33 @@
+# ============================================================
+# .gitignore —— 基于深度相机的物体点云拼接与目标检测
+# ============================================================
+
+# ---------- 数据集 / 权重 / 实验结果 / 第三方源码（不入库） ----------
+# 目录本身保留（含 README.md 说明），仅忽略内容
+data/*
+!data/README.md
+weights/*
+!weights/README.md
+results/*
+!results/README.md
+external/*
+!external/README.md
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---------- 环境变量与密钥 ----------
+.env
+*.env
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+
+# ---------- 临时与日志 ----------
+*.log
+.tmp-tool-results/
