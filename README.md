@@ -24,6 +24,8 @@
 
 详细的分步命令与检查项见 `docs/v100_checklist.md`；消融配置说明见 `configs/ablation/README.md`。
 
+> **脚本调用方式**：仓库内所有 `.sh` 脚本（`scripts/*.sh`）一律用 `bash xxx.sh` 调用，**不要用 `./xxx.sh`**（GitHub 上文件无执行位，且 `bash` 调用与执行位无关、更稳定）。
+
 ### 0.1 CPU 侧已完成清单（上 V100 前不用重复做）
 
 - [x] **真实 SUN3D 数据全流程验证**：MIT studyroom 49 帧（3DMatch 镜像）→ 深度转点云（`depth_scale=1000`）→ 60 帧对 → 6DOF 真值 → 配准全链路 → 可视化全部跑通；真实 vs 模拟配准指标对比见 `docs/experiment_log.md`

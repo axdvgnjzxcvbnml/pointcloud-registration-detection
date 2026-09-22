@@ -68,9 +68,48 @@ Git 提交   ：（如使用版本管理，记录 commit hash）
 - 多假设策略：RANSAC top-k 假设各跑一次 ICP，取 fitness 最优者（对“接近但未达阈值”的对收益最大）；
 - 改进 ICP 自适应阈值起点可由粗配准 `inlier_rmse` 初始化（当前固定从 0.02 起步）。
 
+### 1.2 配准超参扫描（2026-09-22，模拟数据 7 对 × 27 组合，纯 CPU）
+
+**命令**：`python scripts/sweep_registration.py --pairs results/preprocess/pairs/pairs.json --pcd_dir results/preprocess/pcd --pose_gt_dir results/preprocess/pose_gt --out_dir results/registration/sweep`（网格：RANSAC {100k,300k,500k} × FPFH {0.15,0.25,0.35} × voxel {0.02,0.05,0.08}，共 27 组；成功判定：旋转 <5° 且平移 <0.05m）。
+
+**结论先行**：模拟数据较简单，**27 组组合成功率均为 100%**；差异主要体现在精度与耗时。完整明细见 `results/registration/sweep/sweep_results.csv`（未入库）。
+
+**按体素档位汇总**：
+
+| 体素 | FPFH 半径 | RANSAC | 成功率 | 旋转误差°（均值区间） | 平移误差 m（均值区间） | 中位耗时 s（区间） |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.02 | 0.15~0.35 | 100k~500k | 100% | 0.011 ~ 0.019 | 0.0004 ~ 0.0007 | 0.63 ~ 0.76 |
+| 0.05 | 0.15~0.35 | 100k~500k | 100% | 0.015 ~ 0.059 | 0.0006 ~ 0.0026 | 0.38 ~ 0.60 |
+| 0.08 | 0.15~0.35 | 100k~500k | 100% | 0.072 ~ 0.206 | 0.0039 ~ 0.0093 | 0.20 ~ 0.42 |
+
+**关键观察**：
+1. **精度优先 → voxel=0.02**：所有 0.02 组合旋转误差 ≤0.019°、平移 ≤0.0007m，显著优于 0.08（最高 0.206°/0.0093m，精度差约 4 倍）；
+2. **速度优先 → voxel=0.08**：中位耗时 0.20~0.42s（约 0.02 档的 1/3），代价是精度下降；
+3. **RANSAC 迭代在易数据上无差异**：100k↔500k 耗时几乎持平（置信度 0.999 提前终止），说明对高内点率场景 100k 足够；但真实数据（§1.1 REG-004）失败集中在低内点率/歧义帧对，仍建议 V100 上提到 200k+；
+4. FPFH 半径三档差异小，0.25 为稳健中间值。
+
+**写入 configs/default.yaml 的取值**（精度优先，兼顾真实数据稳健性）：`voxel_size=0.02`、`fpfh_radius=0.25`、`ransac_max_iteration=300000`（§1.1 建议 200k+；若 V100 上耗时敏感可回落 100000，见 default.yaml 注释）。
+
 
 
 ---
+
+<!-- ABLATION-REPORT:START -->
+## 1.3 消融实验对比（自动生成，`scripts/ablation_report.py` 维护，勿手改）
+
+| 实验 | mAP@0.25 | mAP@0.5 | 参数量(M) | FLOPs(G) | 推理速度(ms/帧) | 结果文件 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 00 基线（单点云 VoteNet） | TBD | TBD | TBD | TBD | TBD | （未跑） |
+| 01 单 RGB（伪 3D） | TBD | TBD | TBD | TBD | TBD | （未跑） |
+| 02 融合-Concat（主） | TBD | TBD | TBD | TBD | TBD | （未跑） |
+| 03 融合-Attention | TBD | TBD | TBD | TBD | TBD | （未跑） |
+| 04 融合+轻量化 | TBD | TBD | TBD | TBD | TBD | （未跑） |
+<!-- ABLATION-REPORT:END -->
+
+
+
+
+
 
 ## 2. 单条实验详细记录模板
 
