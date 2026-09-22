@@ -18,7 +18,7 @@ train_fusion.py — 融合模型训练（第四批交付）
 ----
     - external/votenet（含编译好的 PointNet2 算子）
     - yolov8n.pt（首次运行自动下载）
-    - 数据：results/preprocess/detection/*.npz（generate_detection_data.py 输出）
+    数据：results/preprocess/detection/*.npz（generate_detection_data.py 输出）
 
 用法
 ----
@@ -153,7 +153,8 @@ class SunRGBDDataset(Dataset):
     帧图像与内参（frames_dir/{name}.npz）：rgb (H,W,3) / K (3,3)
     """
 
-    def __init__(self, det_data_dir, frames_dir=None, sample_names=None):
+    def __init__(self, det_data_dir, frames_dir=None, sample_names=None,
+                 use_image_branch=False):
         det_dir = Path(det_data_dir)
         self.files = sorted(det_dir.glob("*.npz"))
         if sample_names is not None:
@@ -162,6 +163,12 @@ class SunRGBDDataset(Dataset):
         if not self.files:
             raise FileNotFoundError(f"检测数据目录为空: {det_dir}")
         self.frames_dir = Path(frames_dir) if frames_dir else None
+        self.use_image_branch = use_image_branch
+        self._missing_warned = 0
+        if use_image_branch and self.frames_dir is None:
+            logger.warning(
+                "图像分支已开启（use_image_branch=True）但未提供 frames_dir，"
+                "所有样本将使用零图像/单位内参，融合训练无意义，请检查数据路径！")
 
     def __len__(self):
         return len(self.files)
@@ -179,31 +186,43 @@ class SunRGBDDataset(Dataset):
         # 图像与内参（用于图像分支）；缺省时用零张量占位
         rgb = torch.zeros((3, 640, 640), dtype=torch.float32)
         K = torch.eye(3, dtype=torch.float32)
+        letterbox = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
         if self.frames_dir is not None:
             frame_npz = self.frames_dir / f"{path.stem}.npz"
             if frame_npz.is_file():
                 fr = np.load(frame_npz)
                 if "rgb" in fr:
-                    rgb = letterbox_rgb(fr["rgb"], 640)
+                    rgb, lb = letterbox_rgb(fr["rgb"], 640)
+                    letterbox = torch.tensor(lb, dtype=torch.float32)
                 if "K" in fr:
                     K = torch.from_numpy(fr["K"]).float()
+            elif self.use_image_branch and self._missing_warned < 3:
+                logger.warning("帧文件缺失（图像分支将用零张量占位）: %s", frame_npz)
+                self._missing_warned += 1
         item["rgb"] = rgb
         item["K"] = K
+        item["letterbox"] = letterbox   # (scale, pad_x, pad_y)，供投影对齐
         return item
 
 
 def letterbox_rgb(img, size=640):
-    """等比缩放 + 灰边填充到 size×size，返回 (3, size, size) 归一化张量。
+    """等比缩放 + 灰边填充到 size×size。
 
-    与图像分支的 YOLOv8 预处理保持一致（见 yolov8_feature.letterbox_image）。
+    返回:
+        tensor: (3, size, size) 归一化 RGB 张量；
+        letterbox: (scale, pad_x, pad_y) 三元组，投影时用于把
+                   “原图像素坐标”对齐到 letterbox 后的网络输入坐标。
+    与 yolov8_feature.letterbox_image 保持同一套几何参数。
     """
     from yolov8_feature import letterbox_image
-    import cv2
     import torch
 
-    canvas, _, _, _ = letterbox_image(np.ascontiguousarray(img), target=size)
+    canvas, ratio, pad_x, pad_y = letterbox_image(
+        np.ascontiguousarray(img), target=size)
     rgb = canvas[..., ::-1].astype(np.float32) / 255.0   # BGR -> RGB
-    return torch.from_numpy(rgb).permute(2, 0, 1)
+    return torch.from_numpy(rgb).permute(2, 0, 1), (float(ratio),
+                                                    float(pad_x),
+                                                    float(pad_y))
 
 
 # ---------------------------------------------------------------
@@ -246,9 +265,14 @@ class FusionModel:
             vote_num=det_cfg["detect_head"]["vote_num"])
 
     def to(self, device):
-        for m in (self.votebackbone, self.yolo_feat.proj_conv,
+        # 注意：YOLOv8FeatureExtractor 内含 backbone（DetectionModel）
+        # 与 proj_conv 两部分，二者都必须迁移，否则前向时
+        # “主干在 CPU、输入/proj_conv 在 GPU”会报 device mismatch。
+        for m in (self.votebackbone,
+                  self.yolo_feat.backbone, self.yolo_feat.proj_conv,
                   self.fusion_head, self.det_head):
             m.to(device)
+        self.device = device
         return self
 
     def train(self):
@@ -286,8 +310,13 @@ class FusionModel:
             rgb = batch["rgb"].to(device)
             K = batch["K"].to(device)
             img_feat = self.yolo_feat.forward(rgb)         # (B,128,80,80)
+            # letterbox 参数 (B,3)：把原图像素坐标对齐到网络输入；
+            # 数据集中正方形输入时为 (1,0,0)，非正方形（如 640x480）必须传
+            letterbox = batch.get("letterbox")
+            if letterbox is not None:
+                letterbox = letterbox.to(device)
             proj_feat, _ = self.projection.forward(img_feat, seed_xyz, K,
-                                                   letterbox=None)   # (B,N,128)
+                                                   letterbox=letterbox)  # (B,N,128)
         else:
             # 单点云分支：图像特征置零（融合层等效单点云投影）
             proj_feat = torch.zeros(B, N, self.img_dim, device=device)
@@ -352,10 +381,13 @@ def train_fusion(cfg, det_data_dir, frames_dir, out_dir,
     torch.manual_seed(cfg.get("seed", 2024))
     np.random.seed(cfg.get("seed", 2024))
 
+    use_image_branch = cfg.get("ablation", {}).get("use_image_branch", True)
     train_ds = SunRGBDDataset(det_data_dir, frames_dir,
-                              sample_names=[s["name"] for s in split["train"]])
+                              sample_names=[s["name"] for s in split["train"]],
+                              use_image_branch=use_image_branch)
     val_ds = SunRGBDDataset(det_data_dir, frames_dir,
-                            sample_names=[s["name"] for s in split["val"]])
+                            sample_names=[s["name"] for s in split["val"]],
+                            use_image_branch=use_image_branch)
     train_loader = DataLoader(train_ds, batch_size=train_cfg["batch_size"],
                               shuffle=True, num_workers=train_cfg["num_workers"])
     val_loader = DataLoader(val_ds, batch_size=train_cfg["batch_size"],
