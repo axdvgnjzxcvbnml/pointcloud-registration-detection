@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>基于深度相机的物体点云拼接与目标检测 —— 流水线总览</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --line: #d9dee8;
+    --text: #1f2733;
+    --muted: #5c6b7a;
+    --accent: #2f6fed;
+    --ok: #2e9e5b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+    padding: 40px 20px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; margin-bottom: 6px; }
+  .sub { color: var(--muted); margin-bottom: 28px; }
+  .stage { margin-bottom: 26px; }
+  .stage h2 {
+    font-size: 15px; color: var(--accent); margin-bottom: 10px;
+    padding-left: 10px; border-left: 4px solid var(--accent);
+  }
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card .title { font-weight: 600; margin-bottom: 4px; }
+  .card .file { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .card .desc { font-size: 13px; color: var(--text); }
+  .arrow { text-align: center; color: var(--muted); font-size: 20px; margin: 4px 0; }
+  .note {
+    margin-top: 28px; font-size: 13px; color: var(--muted);
+    background: #eef3fb; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .badge { display:inline-block; font-size:11px; padding:1px 8px; border-radius:999px;
+    background:#e8eefb; color:var(--accent); margin-left:6px; vertical-align:middle;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>基于深度相机的物体点云拼接与目标检测</h1>
+  <div class="sub">SUN RGB-D 数据集 · VoteNet + YOLOv8n · 流水线总览（代码骨架，实验数值待运行回填）</div>
+
+  <div class="stage">
+    <h2>① 数据预处理 preprocess/</h2>
+    <div class="grid">
+      <div class="card"><div class="title">解析 SUN RGB-D</div><div class="file">parse_sunrgbd.py</div><div class="desc">读取图像/深度/标注/外参，输出帧 RGB+K npz</div></div>
+      <div class="card"><div class="title">深度 → 点云</div><div class="file">depth_to_pointcloud.py</div><div class="desc">深度图反投影 + 去噪 + 下采样，输出每帧点云</div></div>
+      <div class="card"><div class="title">帧对采样</div><div class="file">sample_frame_pairs.py</div><div class="desc">SUN3D 序列按间隔 5/10/30 抽取帧对</div></div>
+      <div class="card"><div class="title">位姿真值</div><div class="file">compute_pose_gt.py</div><div class="desc">由外参计算帧间 6DOF 相对位姿 T_AB</div></div>
+      <div class="card"><div class="title">检测数据</div><div class="file">generate_detection_data.py</div><div class="desc">生成 VoteNet 训练数据（投票标签/真值框）</div></div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>② 点云拼接 registration/（纯 CPU）</h2>
+    <div class="grid">
+      <div class="card"><div class="title">预处理</div><div class="file">preprocess_pointcloud.py</div><div class="desc">统计去噪 · 体素降采样 · 法向量估计</div></div>
+      <div class="card"><div class="title">粗配准</div><div class="file">coarse_registration.py</div><div class="desc">FPFH + RANSAC，输出初始变换</div></div>
+      <div class="card"><div class="title">精配准</div><div class="file">fine_registration.py</div><div class="desc">改进 ICP：点到平面 + 自适应阈值 + 早停</div></div>
+      <div class="card"><div class="title">评测</div><div class="file">evaluate_registration.py</div><div class="desc">RMSE / 旋转 / 平移 / 成功率</div></div>
+      <div class="card"><div class="title">可视化</div><div class="file">visualize_registration.py</div><div class="desc">拼接前后对比图</div></div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>③ 三维目标检测 detection/（V100 GPU）</h2>
+    <div class="grid">
+      <div class="card"><div class="title">点云分支</div><div class="file">votenet_baseline.py</div><div class="desc">VoteNet 主干（PointNet2）种子点特征</div></div>
+      <div class="card"><div class="title">图像分支</div><div class="file">yolov8_feature.py</div><div class="desc">YOLOv8n P3 层 80×80×64 语义特征</div></div>
+      <div class="card"><div class="title">投影采样</div><div class="file">projection.py</div><div class="desc">3D 种子 → 2D 双线性采样图像特征</div></div>
+      <div class="card"><div class="title">融合头</div><div class="file">fusion_head.py</div><div class="desc">Concat / Cross-Attention 特征融合</div></div>
+      <div class="card"><div class="title">训练</div><div class="file">train_fusion.py</div><div class="desc">冻结双主干，只训融合头+检测头（60 epoch）</div></div>
+      <div class="card"><div class="title">轻量化</div><div class="file">lightweight_head.py</div><div class="desc">DSConv1d 深度可分离头，通道 256→128</div></div>
+      <div class="card"><div class="title">微调</div><div class="file">finetune_lightweight.py</div><div class="desc">基于融合权重微调 20 epoch</div></div>
+      <div class="card"><div class="title">评测</div><div class="file">evaluate_detection.py</div><div class="desc">mAP@0.25/0.5 · 参数量 · FLOPs · 速度</div></div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <div class="stage">
+    <h2>④ 集成与可视化 app/</h2>
+    <div class="grid">
+      <div class="card"><div class="title">场景展示</div><div class="file">load_scene.py</div><div class="desc">多帧点云加载与离屏渲染 PNG</div></div>
+      <div class="card"><div class="title">配准对比</div><div class="file">compare_registration.py</div><div class="desc">左右视图：配准前 vs 配准后</div></div>
+      <div class="card"><div class="title">检测叠加</div><div class="file">overlay_detection.py</div><div class="desc">3D 框 + 类别分数标签</div></div>
+      <div class="card"><div class="title">演示导出</div><div class="file">export_demo.py</div><div class="desc">相机环绕动画导出 GIF / MP4</div></div>
+    </div>
+  </div>
+
+  <div class="note">
+    说明：本页为流水线静态总览。所有实验数值（mAP、RMSE、参数量等）为占位（TBD），
+    需在目标服务器（单卡 V100）运行后回填至 README.md 与 docs/experiment_log.md。
+    配置模板见 configs/default.yaml；消融实验见 configs/ablation/；CI 冒烟见 .github/workflows/ci.yml。
+  </div>
+</div>
+</body>
+</html>
