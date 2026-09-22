@@ -20,6 +20,7 @@
 # ============================================================
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,9 @@ import open3d as o3d
 from open3d.visualization import rendering
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_compat import (make_offscreen_renderer, setup_camera as setup_camera_compat,
+                           scene_center_radius)
 from load_scene import load_frames, build_pointcloud   # 同目录复用
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -58,10 +62,11 @@ def make_orbit_camera(center, radius, n_frames=60, elevation=20.0):
 # ---------------------------------------------------------------
 # 逐帧离屏渲染
 # ---------------------------------------------------------------
+
 def render_orbit_frames(geometries, camera, n_frames=60, width=1280,
                         height=720, fov=60.0, point_size=2.0):
-    """按相机序列逐帧渲染，返回 PIL RGB 图像列表（内存中）。"""
-    renderer = rendering.OffscreenRenderer(width, height, headless=True)
+    """按相机序列逐帧渲染，返回 PIL RGB 图像列表（全程内存，不写临时文件）。"""
+    renderer = make_offscreen_renderer(width, height)
     renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
     mat_pcd = rendering.MaterialRecord()
     mat_pcd.shader = "defaultUnlit"
@@ -76,13 +81,10 @@ def render_orbit_frames(geometries, camera, n_frames=60, width=1280,
     frames = []
     center, up = camera["center"], camera["up"]
     for eye in camera["eyes"]:
-        renderer.scene.setup_camera(fov, center, eye, up)
+        setup_camera_compat(renderer, fov, center, eye, up)
         img = renderer.render_to_image()
-        tmp = f"__orbit_frame_{len(frames):04d}.png"
-        o3d.io.write_image(tmp, img)
-        frames.append(Image.open(tmp).convert("RGB"))
-    for fp in Path(".").glob("__orbit_frame_*.png"):
-        fp.unlink()
+        # render_to_image -> numpy -> PIL，全程内存（避免逐帧写盘残留临时文件）
+        frames.append(Image.fromarray(np.asarray(img)).convert("RGB"))
     return frames
 
 
@@ -91,6 +93,8 @@ def render_orbit_frames(geometries, camera, n_frames=60, width=1280,
 # ---------------------------------------------------------------
 def write_gif(frames, out_path, fps=15.0):
     """PIL 写 GIF 动图（循环播放）。"""
+    if not frames:
+        raise ValueError("没有可写入的帧（frames 为空），无法导出 GIF")
     duration = int(1000.0 / fps)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,10 +165,8 @@ def main():
                 geometries.append(box_lineset(d["box7"], color=class_color(d["label"])))
         log.info("叠加 %d 个检测框", len(dets))
 
-    # 场景中心与半径
-    pts = np.concatenate([np.asarray(p.points) for p in pcds], axis=0)
-    center = pts.mean(axis=0)
-    radius = float(np.linalg.norm(pts - center, axis=1).max()) or 1.0
+    # 场景中心与半径（空点云时 scene_center_radius 抛 ValueError）
+    center, radius = scene_center_radius(pcds)
 
     camera = make_orbit_camera(center, radius * 1.5, args.n_frames,
                                elevation=args.elevation)

@@ -4,13 +4,13 @@
 # 功能：
 #   1. 读取场景目录下的帧文件（.npz：point_cloud/xyz 必选，
 #      colors/rgb 可选），可体素下采样；
-#   2. 交互模式：Open3D Visualizer 多窗口/单窗口展示；
-#   3. 离屏模式（--headless，无显示器服务器）：渲染一帧
+#   1. 交互模式：Open3D Visualizer 多窗口/单窗口展示（--interactive）；
+#   2. 离屏模式（默认，无显示器服务器也可用）：渲染一帧
 #      静态俯视/侧视 PNG 到 --out-dir，便于快速检查。
 #
 # 用法示例：
-#   python app/load_scene.py --scene-dir data/SUN3D/scene_001 --headless \
-#       --out-dir results/vis
+#   python app/load_scene.py --scene-dir data/SUN3D/scene_001 \
+#       --out-dir results/vis          # 离屏渲染（默认）
 #   python app/load_scene.py --scene-dir data/SUN3D/scene_001 --interactive
 #
 # 依赖：numpy / open3d（纯 CPU，不需要 GPU）
@@ -18,12 +18,16 @@
 import argparse
 import glob
 import logging
-import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import open3d as o3d
 from open3d.visualization import rendering
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_compat import (make_offscreen_renderer, setup_camera as setup_camera_compat,
+                           orbit_eye)
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger("load_scene")
@@ -92,6 +96,7 @@ def build_pointcloud(xyz, rgb=None, voxel_size=None, color=None):
 # ---------------------------------------------------------------
 # 渲染（离屏）
 # ---------------------------------------------------------------
+
 def render_offscreen(pcds, out_path, width=1280, height=720, fov=60.0,
                      elevation=25.0, azimuth=0.0, dist_scale=1.4):
     """用 OffscreenRenderer 渲染一组点云为单张 PNG（headless 可用）。
@@ -107,18 +112,11 @@ def render_offscreen(pcds, out_path, width=1280, height=720, fov=60.0,
         azimuth    : 相机方位角（度，绕 Y 轴旋转）
         dist_scale : 相机距离 = 场景半径 × dist_scale
     """
-    bounds = _scene_bounds(pcds)
-    center, radius = bounds["center"], bounds["radius"]
-    if radius <= 1e-9:
-        radius = 1.0
+    center, radius = _scene_bounds(pcds)
     dist = radius * dist_scale
 
-    eye = np.array([
-        center[0] + dist * np.cos(np.deg2rad(elevation)) * np.sin(np.deg2rad(azimuth)),
-        center[1] + dist * np.cos(np.deg2rad(elevation)) * np.cos(np.deg2rad(azimuth)),
-        center[2] + dist * np.sin(np.deg2rad(elevation)),
-    ])
-    renderer = rendering.OffscreenRenderer(width, height, headless=True)
+    eye = orbit_eye(center, dist, elevation, azimuth)
+    renderer = make_offscreen_renderer(width, height)
     renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
     mat = rendering.MaterialRecord()
     mat.shader = "defaultUnlit"
@@ -126,18 +124,23 @@ def render_offscreen(pcds, out_path, width=1280, height=720, fov=60.0,
     mat.point_size = 2.0
     for i, pcd in enumerate(pcds):
         renderer.scene.add_geometry(f"pcd_{i}", pcd, mat)
-    renderer.scene.setup_camera(fov, center, eye, [0.0, 0.0, 1.0])
+    setup_camera_compat(renderer, fov, center, eye, [0.0, 0.0, 1.0])
     img = renderer.render_to_image()
     o3d.io.write_image(str(out_path), img)
     log.info("已渲染: %s (%dx%d)", out_path, width, height)
 
 
 def _scene_bounds(pcds):
-    """合并所有点云，返回中心与包围球半径。"""
-    pts = np.concatenate([np.asarray(p.points) for p in pcds], axis=0)
+    """合并所有点云，返回 (center, radius)；空点云抛 ValueError。"""
+    pts_list = [np.asarray(p.points) for p in pcds if len(p.points) > 0]
+    if not pts_list:
+        raise ValueError("所有点云均为空，无法计算相机视角")
+    pts = np.concatenate(pts_list, axis=0)
     center = pts.mean(axis=0)
     radius = float(np.linalg.norm(pts - center, axis=1).max())
-    return {"center": center, "radius": radius}
+    if radius <= 1e-9:
+        radius = 1.0
+    return center, radius
 
 
 # ---------------------------------------------------------------
