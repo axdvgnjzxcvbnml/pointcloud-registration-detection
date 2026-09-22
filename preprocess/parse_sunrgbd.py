@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-parse_sunrgbd.py — 解析 SUN RGB-D 数据集（第二批交付）
+parse_sunrgbd.py — 解析 SUN RGB-D 文件结构（第二批交付）
 
 功能
 ----
-    遍历 SUN RGB-D / SUN3D 目录，为每一帧生成元数据与 RGB+K 中间产物：
-      - image/depth/label/extrinsics 路径索引（相对路径）
-      - 相机内参 K（3×3）
-      - 帧 RGB 图（可选中转 .npz 或 .jpg）
-    供后续 depth_to_pointcloud / generate_detection_data 使用。
+    扫描 SUN RGB-D 数据目录，对每帧读取：
+        - RGB 图（image/*.jpg|png）
+        - 深度图（depth/*.mat 或 16bit png，单位 mm）
+        - 相机内参 K（3x3）
+        - 相机外参 Rtilt（3x4，部分子集提供）
+    输出统一格式（.npz + manifest.json），供后续模块使用。
 
-SUN RGB-D 官方结构（参考 SUNRGBDtoolbox）：
-    SUNRGBD/
-      ├── kv1/ kv2/ kv3/ ...        # 分区
-      │   └── 3DOffice/ ...         # 场景
-      │       ├── image/            # RGB（jpg）
-      │       ├── depth/            # 深度（16bit png，单位 mm）
-      │       ├── label/            # 2D/3D 标注
-      │       └── extrinsics/       # 相机外参（部分子集）
-      └── SUNRGBDtoolbox/           # 官方 MATLAB 工具箱
-            └── Metadata/           # all2all.mat（内参/外参映射）
+解析逻辑参考
+------------
+    VoteNet 官方（facebookresearch/votenet）的 sunrgbd_data.py：
+      通过 SUN RGB-D 官方工具箱元数据读取帧列表，深度图用
+      scipy.io.loadmat 读取（变量名 'depth'）。
 
-说明
+输入目录约定（以 data/SUNRGBD 为根）
+-----------------------------------
+    image/      RGB 图
+    depth/      深度图（.mat 或 .png，16bit，单位 mm）
+    label/      标注（3D bbox 等，本脚本仅登记路径）
+    extrinsics/ 相机外参（3x4 .txt，仅部分子集提供）
+
+输出
 ----
-    本脚本为骨架实现，目录结构与 Metadata 解析逻辑以实际数据集为准，
-    与 SUNRGBDtoolbox 不一致处按官方工具箱调整（TODO 标注）。
+    {out_dir}/manifest.json                    全量帧清单
+    {out_dir}/frames/{scene}_{frame_key}.npz   rgb / depth / K / Rtilt
 
 用法
 ----
     python preprocess/parse_sunrgbd.py --data_root data/SUNRGBD \
-        --out_dir results/preprocess \
-        --toolbox_dir data/SUNRGBDtoolbox
+        --out_dir results/preprocess --scenes SUNRGBD1,SUNRGBD2
 """
 
 import argparse
@@ -40,132 +42,211 @@ import logging
 from pathlib import Path
 
 import numpy as np
+from scipy.io import loadmat
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# 占位内参集中维护在 preprocess/defaults.py（避免多处定义不一致）；
+# 真实数据必须从 SUNRGBDtoolbox 元数据（SUNRGBDMeta）读取。
+try:
+    from defaults import DEFAULT_K
+except ImportError:  # 作为 preprocess 包被导入时
+    from preprocess.defaults import DEFAULT_K
 
-def find_frame_files(scene_dir):
-    """在单个场景目录下索引 image/depth/label/extrinsics 文件。
 
-    返回: list[dict]（每帧）：
-        {"name", "image", "depth", "label", "extrinsics"}
+def load_rgb(path):
+    """读取 RGB 图，返回 (H, W, 3) uint8 数组。"""
+    with Image.open(path) as img:
+        rgb = np.asarray(img.convert("RGB"))
+    return rgb
+
+
+def load_depth(path):
+    """读取深度图，返回 (H, W) float32（保持原始单位，不缩放）。
+
+    支持两种格式：
+      - .mat：loadmat 读取变量 'depth'（SUN RGB-D 官方格式，单位 mm）
+      - .png：16bit 单通道，单位 mm
     """
-    img_dir = scene_dir / "image"
-    dep_dir = scene_dir / "depth"
-    lab_dir = scene_dir / "label"
-    ext_dir = scene_dir / "extrinsics"
+    path = Path(path)
+    if path.suffix.lower() == ".mat":
+        data = loadmat(str(path))
+        if "depth" not in data:
+            raise KeyError(
+                f"{path} 中未找到变量 'depth'，实际变量: {list(data.keys())}")
+        depth = data["depth"].astype(np.float32)
+    else:
+        with Image.open(path) as img:
+            depth = np.asarray(img, dtype=np.float32)
+        if depth.ndim == 3:  # 保险：某些 png 带 alpha/灰度三通道
+            depth = depth[..., 0]
+    return depth
 
-    imgs = sorted(img_dir.glob("*.jpg")) if img_dir.is_dir() else []
-    if not imgs:
-        imgs = sorted(img_dir.glob("*.png")) if img_dir.is_dir() else []
+
+def load_intrinsic(scene_dir, frame_key):
+    """读取相机内参 K（3x3）。
+
+    查找顺序：
+      1. {scene_dir}/intrinsics/{frame_key}.txt（若数据集提供）
+      2. {scene_dir}/intrin.txt 或 intrinsics.txt
+      3. 回退 DEFAULT_K（占位，并给出警告）
+    """
+    scene_dir = Path(scene_dir)
+    candidates = [
+        scene_dir / "intrinsics" / f"{frame_key}.txt",
+        scene_dir / "intrin.txt",
+        scene_dir / "intrinsics.txt",
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            return np.loadtxt(str(cand)).reshape(3, 3).astype(np.float64)
+    logger.warning("未找到内参文件（%s），使用默认 K（占位）", scene_dir)
+    return DEFAULT_K.copy()
+
+
+def load_extrinsic(path):
+    """读取相机外参（3x4 .txt），返回 (3, 4) float64 或 None。
+
+    SUN RGB-D 的 extrinsics 为 3x4 矩阵（旋转 + 平移）。
+    本脚本按“原始 3x4 直读、不追加齐次行”处理；
+    坐标系的含义在 compute_pose_gt.py 中按 --pose_convention 解释。
+    """
+    path = Path(path)
+    if not path.is_file():
+        logger.warning("外参文件不存在: %s（部分子集不提供）", path)
+        return None
+    return np.loadtxt(str(path)).reshape(3, 4).astype(np.float64)
+
+
+def discover_frames(data_root):
+    """扫描 image/ 目录，返回帧清单（list[dict]）。
+
+    每条记录包含：
+        scene, frame_key, rgb_path, depth_path, label_path, ext_path
+    """
+    data_root = Path(data_root)
+    img_root = data_root / "image"
+    if not img_root.is_dir():
+        raise FileNotFoundError(f"未找到图像目录: {img_root}")
 
     frames = []
-    for img in imgs:
-        stem = img.stem
-        depth = dep_dir / f"{stem}.png"
-        label = lab_dir / f"{stem}.txt"
-        ext = ext_dir / f"{stem}.txt"
-        frames.append({
-            "name": f"{scene_dir.name}/{stem}",
-            "image": str(img.relative_to(scene_dir)),
-            "depth": str(depth.relative_to(scene_dir)) if depth.is_file() else None,
-            "label": str(label.relative_to(scene_dir)) if label.is_file() else None,
-            "extrinsics": str(ext.relative_to(scene_dir)) if ext.is_file() else None,
-        })
+    for scene_dir in sorted(img_root.iterdir()):
+        if not scene_dir.is_dir():
+            continue
+        for img_path in sorted(scene_dir.glob("*")):
+            if img_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                continue
+            frame_key = img_path.stem
+            scene = scene_dir.name
+            depth_path = data_root / "depth" / scene / f"{frame_key}.mat"
+            if not depth_path.is_file():
+                depth_path = data_root / "depth" / scene / f"{frame_key}.png"
+            label_path = data_root / "label" / scene / f"{frame_key}.txt"
+            ext_path = data_root / "extrinsics" / scene / f"{frame_key}.txt"
+            frames.append({
+                "scene": scene,
+                "frame_key": frame_key,
+                "rgb_path": str(img_path),
+                "depth_path": str(depth_path) if depth_path.is_file() else None,
+                "label_path": str(label_path) if label_path.is_file() else None,
+                "ext_path": str(ext_path) if ext_path.is_file() else None,
+            })
     return frames
 
 
-def read_intrinsics(scene_dir, toolbox_dir=None):
-    """读取相机内参 K。
+def parse_sunrgbd(data_root, out_dir, scenes=None, max_frames=None):
+    """主流程：解析全部（或指定场景子集）帧并输出统一格式。
 
-    优先：场景目录下的 intrinsics.txt / K.txt；
-    回退：SUNRGBDtoolbox Metadata（all2all.mat，MATLAB 格式，需 scipy.io）。
-    TODO：按实际工具箱 Metadata 键名解析（depth_KL / K 等）。
+    Args:
+        data_root: SUN RGB-D 数据根目录。
+        out_dir:   输出目录（manifest.json + frames/）。
+        scenes:    场景名列表，None 表示全部场景。
+        max_frames: 最多解析帧数（调试用）。
+    Returns:
+        manifest 列表。
     """
-    for cand in ("intrinsics.txt", "K.txt", "camera_params.txt"):
-        p = scene_dir / cand
-        if p.is_file():
-            return np.loadtxt(p).reshape(3, 3)
-    if toolbox_dir is not None:
-        meta = Path(toolbox_dir) / "Metadata" / "all2all.mat"
-        if meta.is_file():
-            try:
-                from scipy.io import loadmat
-                data = loadmat(str(meta))
-                # TODO: 键名以官方工具箱为准
-                for key in ("depth_KL", "K", "RGB_KL"):
-                    if key in data:
-                        return np.asarray(data[key]).reshape(3, 3)
-            except Exception as e:
-                logger.warning("读取 Metadata 失败: %s", e)
-    raise FileNotFoundError(f"未找到内参文件: {scene_dir}")
-
-
-def save_frame_rgb(frame, scene_dir, out_dir):
-    """把帧 RGB 图转为 640×640 归一化 npz（供训练/可视化，可选）。"""
-    import cv2
-
-    img_path = scene_dir / frame["image"]
-    img = cv2.imread(str(img_path))
-    if img is None:
-        logger.warning("读取图片失败: %s", img_path)
-        return None
-    # letterbox 到 640×640（与 YOLOv8 预处理一致，见 detection/yolov8_feature）
-    canvas = np.full((640, 640, 3), 114, dtype=np.uint8)
-    h, w = img.shape[:2]
-    scale = min(640 / h, 640 / w)
-    nh, nw = int(round(h * scale)), int(round(w * scale))
-    resized = cv2.resize(img, (nw, nh))
-    x0, y0 = (640 - nw) // 2, (640 - nh) // 2
-    canvas[y0:y0 + nh, x0:x0 + nw] = resized
-    rgb = canvas[..., ::-1]                      # BGR -> RGB
-    np.savez_compressed(str(out_dir / f"{frame['name'].replace('/', '_')}.npz"),
-                        rgb=rgb.astype(np.float32) / 255.0)
-
-
-def parse_dataset(data_root, out_dir, toolbox_dir=None, save_rgb=False):
-    """遍历整个数据集生成元数据索引。"""
     data_root = Path(data_root)
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    frames = []
     frames_dir = out_dir / "frames"
-    if save_rgb:
-        frames_dir.mkdir(parents=True, exist_ok=True)
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
-    scene_dirs = [p for p in sorted(data_root.iterdir()) if p.is_dir()]
-    for scene in scene_dirs:
-        for f in find_frame_files(scene):
-            f["K"] = read_intrinsics(scene, toolbox_dir).tolist()
-            if save_rgb:
-                save_frame_rgb(f, scene, frames_dir)
-            frames.append(f)
+    frames = discover_frames(data_root)
+    if scenes:
+        scene_set = set(scenes)
+        frames = [f for f in frames if f["scene"] in scene_set]
+    if max_frames:
+        frames = frames[:max_frames]
+    logger.info("待解析帧数: %d", len(frames))
 
-    with open(out_dir / "frames_index.json", "w", encoding="utf-8") as fp:
-        json.dump(frames, fp, ensure_ascii=False, indent=2)
-    logger.info("索引 %d 帧 -> %s", len(frames), out_dir / "frames_index.json")
-    return frames
+    manifest = []
+    skipped = []   # 缺深度等被跳过的帧，单独落盘以便审计（不污染主 manifest）
+    for i, item in enumerate(frames):
+        rgb = load_rgb(item["rgb_path"])
+        if not item["depth_path"]:
+            logger.warning("帧 %s 缺少深度图，跳过", item["frame_key"])
+            skipped.append({"scene": item["scene"],
+                            "frame_key": item["frame_key"],
+                            "reason": "missing_depth"})
+            continue
+        depth = load_depth(item["depth_path"])
+        K = load_intrinsic(data_root / "image" / item["scene"], item["frame_key"])
+        Rtilt = load_extrinsic(item["ext_path"]) if item["ext_path"] else None
+
+        out_npz = frames_dir / f"{item['scene']}_{item['frame_key']}.npz"
+        np.savez_compressed(
+            out_npz,
+            rgb=rgb,
+            depth=depth,
+            K=K,
+            Rtilt=Rtilt if Rtilt is not None else np.zeros((3, 4), dtype=np.float64),
+        )
+
+        manifest.append({
+            "scene": item["scene"],
+            "frame_key": item["frame_key"],
+            "npz_path": str(out_npz),
+            "rgb_shape": list(rgb.shape),
+            "depth_shape": list(depth.shape),
+            "has_depth": True,
+            "has_extrinsic": Rtilt is not None,
+        })
+        if (i + 1) % 200 == 0:
+            logger.info("已解析 %d/%d 帧", i + 1, len(frames))
+
+    manifest_path = out_dir / "manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    # 跳过帧审计清单（无跳过时写空列表）
+    skipped_path = out_dir / "skipped_frames.json"
+    with open(skipped_path, "w", encoding="utf-8") as f:
+        json.dump(skipped, f, ensure_ascii=False, indent=2)
+    logger.info("完成：共 %d 帧，跳过 %d 帧（见 %s），manifest -> %s",
+                len(manifest), len(skipped), skipped_path, manifest_path)
+    return manifest
 
 
 def main():
-    parser = argparse.ArgumentParser(description="解析 SUN RGB-D 数据集")
+    parser = argparse.ArgumentParser(description="解析 SUN RGB-D 文件结构")
     parser.add_argument("--data_root", default="data/SUNRGBD",
-                        help="SUN RGB-D 原始数据根目录")
-    parser.add_argument("--toolbox_dir", default="data/SUNRGBDtoolbox",
-                        help="官方工具箱目录（内参 Metadata）")
+                        help="SUN RGB-D 数据根目录")
     parser.add_argument("--out_dir", default="results/preprocess",
-                        help="输出目录")
-    parser.add_argument("--save_rgb", action="store_true",
-                        help="同时输出 640×640 归一化 RGB npz（供训练）")
-    parser.add_argument("--verbose", action="store_true")
+                        help="统一格式输出目录")
+    parser.add_argument("--scenes", default=None,
+                        help="逗号分隔的场景子集，如 SUNRGBD1,SUNRGBD2")
+    parser.add_argument("--max_frames", type=int, default=None,
+                        help="最多解析帧数（调试用）")
+    parser.add_argument("--verbose", action="store_true",
+                        help="输出调试日志")
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    parse_dataset(args.data_root, args.out_dir,
-                  toolbox_dir=args.toolbox_dir, save_rgb=args.save_rgb)
+
+    scenes = args.scenes.split(",") if args.scenes else None
+    parse_sunrgbd(args.data_root, args.out_dir,
+                  scenes=scenes, max_frames=args.max_frames)
 
 
 if __name__ == "__main__":
