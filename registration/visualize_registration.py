@@ -13,11 +13,6 @@ visualize_registration.py — 拼接前后左右视图对比（第三批交付�
       - --offscreen 离屏模式（无显示环境 / 服务器）：输出 PNG
         （before.png / after.png / comparison.png 左右拼合图）
 
-说明
-----
-    本模块属于 registration/，按约束只依赖 numpy / open3d / scipy，
-    因此保留一份独立的渲染兼容层（不 import app/render_compat.py）。
-
 用法
 ----
     python registration/visualize_registration.py \
@@ -92,11 +87,7 @@ def visualize_gui(source_path, target_path, T, window_size=(960, 640)):
 
 
 def setup_camera_compat(renderer, fov, center, eye, up):
-    """兼容 Open3D 0.17（Open3DScene.setup_camera）与 0.19+（OffscreenRenderer.setup_camera）。
-
-    0.17：renderer.scene.setup_camera(fov, center, eye, up)，可接受 1D/2D 数组；
-    0.19+：renderer.setup_camera(...)，且 center/eye/up 必须为 (3,1) float32。
-    """
+    """兼容 Open3D 0.17（Open3DScene.setup_camera）与 0.19+（OffscreenRenderer.setup_camera）。"""
     if hasattr(renderer, "setup_camera"):
         renderer.setup_camera(fov,
                               np.asarray(center, dtype=np.float32).reshape(3, 1),
@@ -124,8 +115,6 @@ def render_offscreen(source_path, target_path, T, out_dir,
     src_after.transform(T)
 
     def _render(geoms, name):
-        # 注意：OffscreenRenderer 在 0.17/0.19 均无 headless 参数，直接 (w,h) 构造；
-        # 无 GPU 环境依赖 EGL/OSMesa（详见 docs/troubleshooting.md）。
         renderer = rendering.OffscreenRenderer(width, height)
         renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
         mat = rendering.MaterialRecord()
@@ -148,7 +137,7 @@ def render_offscreen(source_path, target_path, T, out_dir,
     p_before = _render([src_before, tgt], "before.png")
     p_after = _render([src_after, tgt], "after.png")
 
-    # 左右拼合成一张对比图 comparison.png（内存拼接，不落临时文件）
+    # 左右拼合成一张对比图 comparison.png
     from PIL import Image
     imgs = [Image.open(p_before).convert("RGB"),
             Image.open(p_after).convert("RGB")]

@@ -84,6 +84,7 @@ for name, spec, check_in_ci in CHECKS:
         continue
     if name == "python":
         ok, cur = python_ok()
+        op, want = parse_spec(spec)
         results.append((name, spec, "PASS" if ok else "FAIL",
                         cur + ("（满足 >=3.8）" if ok else "（不满足，需 >=3.8）")))
         continue
