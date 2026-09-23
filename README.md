@@ -24,6 +24,11 @@
 
 详细的分步命令与检查项见 `docs/v100_checklist.md`；消融配置说明见 `configs/ablation/README.md`。
 
+> **配准参数已锁定**（`configs/default.yaml` → `registration` 节）：voxel 0.03 / FPFH 0.40 /
+> RANSAC 500k / mutual_filter=False——这是真实 SUN3D 数据（20 对 × 3 次重复）扫描出的
+> 最优组合（中位成功率 50%），V100 上**直接使用，无需再调参**。配准评测命令：
+> `python registration/evaluate_registration.py --config configs/default.yaml --pairs results/preprocess/pairs/pairs_real.json --pose_gt_dir results/preprocess/pose_gt`（真实数据对应帧对/真值路径以 `docs/v100_checklist.md` Step 3 为准）。
+
 > **脚本调用方式**：仓库内所有 `.sh` 脚本（`scripts/*.sh`）一律用 `bash xxx.sh` 调用，**不要用 `./xxx.sh`**（GitHub 上文件无执行位，且 `bash` 调用与执行位无关、更稳定）。
 
 ### 0.1 CPU 侧已完成清单（上 V100 前不用重复做）
@@ -329,18 +334,46 @@ python app/overlay_detection.py --point-cloud results/preprocess/pcd_real/mit_st
 
 各批次交付对应关系：第二批 → `preprocess/`，第三批 → `registration/`，第四批 → `detection/`，第五批 → `configs/ablation/`，第六批 → `app/`，第七批 → `docs/`。
 
-## 6. 实验结果（占位，待运行回填）
+## 6. 实验结果
+
+### 6.1 点云拼接（配准）——真实 SUN3D 数据结论（2026-09-23 锁定）
+
+> 评测：MIT studyroom 49 帧 / 20 对（间隔 5/10/30 分层抽样），每组合 3 次重复取中位，
+> 固定口径旋转 5° + 平移 0.05m。完整过程见 `docs/experiment_log.md` §1.5–§1.10。
+
+| 方法 | 中位成功率 | min/max | iv5 | iv10 | iv30 |
+| --- | --- | --- | --- | --- | --- |
+| 基线（默认参数） | 27%（60 对历史值）/ 25%（20 对） | — | 57% | 14% | 0% |
+| **最优组合**（voxel 0.03 / FPFH 0.40 / RANSAC 500k / mf=False） | **50%** | 35%–50% | **86%** | 29% | 33% |
+| FGR | 35% | 35%–40% | 43% | 29% | 33% |
+| 法向量一致性检查（30°） | 50% | 50%×3 | 86% | **43%** | 17% |
+| 多尺度（0.08→0.03m） | 45% | 25%–50% | 57% | 57% | 17% |
+
+**结论**：
+
+- **传统方法最终成功率：50%（iv5 86% / iv10 29% / iv30 33%）**，相对基线 27% 提升
+  23 个百分点，参数已锁定到 `configs/default.yaml`（`registration` 节）；
+- **瓶颈分析**：低重叠场景（间隔 30）是结构性难题——失败对平移误差 0.31–1.23m，
+  阈值敏感性分析证实 iv30 对任何阈值都不变；参数微调（任务一/二/三）与鲁棒方法
+  （任务四：FGR / 法向检查 / 多尺度）均无法突破；
+- **失败模式**：E 类「精度边缘」6 对（旋转 <2°、平移 0.05–0.12m 略超阈）+ F 类
+  「平移严重错配」4 对（全 iv30）；成功子集精度旋转中位 0.54° / 平移 0.029m，
+  精配准（改进 ICP）无问题；
+- **未来工作**：低重叠场景需深度学习方法做初始对齐（Predator / CoFiNet /
+  GeoTransformer），详见 `docs/registration_failure_analysis.md` §7。
+
+### 6.2 检测（占位，待 V100 运行回填）
 
 | 模块 | 配置 | 指标 | 数值 | 备注 |
 | --- | --- | --- | --- | --- |
-| 点云拼接 | FPFH+RANSAC+ICP | RMSE (m) | TBD | 待运行 |
-| 点云拼接 | 点到点 ICP / FGR 基线 | 成功率 | TBD | 对比基线 |
+| 点云拼接 | FPFH+RANSAC+ICP（最优组合） | 成功率 | **50%**（真实数据已锁定） | iv5 86% / iv10 29% / iv30 33% |
+| 点云拼接 | 点到点 ICP / FGR 基线 | 成功率 | 25% / 35% | 对比基线（20 对） |
 | 检测 | VoteNet 基线（单点云） | mAP@0.25 / mAP@0.5 | TBD | 10 类 |
 | 检测 | 融合-Concat（主融合） | mAP@0.25 / mAP@0.5 | TBD | 10 类 |
 | 检测 | 融合-Attention（消融） | mAP@0.25 / mAP@0.5 | TBD | 10 类 |
 | 检测 | 融合+轻量化 | mAP / 参数量 / FLOPs | TBD | 效率对比 |
 
-> 记录规范见 `docs/experiment_log.md`（第七批输出）。
+> 记录规范见 `docs/experiment_log.md`。
 
 ## 7. 相关参考
 
