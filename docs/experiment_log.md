@@ -21,6 +21,26 @@ Git 提交   ：（如使用版本管理，记录 commit hash）
 
 ---
 
+## 0.1 配准成功判据与报告口径（2026-09-23 统一，补做任务四）
+
+**成功判据（全项目统一，`evaluate_registration.py` / 扫描脚本均按此判定）**：
+
+- 成功 ⇔ **旋转角误差 < 5° 且 平移误差 < 0.05m**（与真值 T_AB 比较）；
+- 说明：需求评审时的表述「RMSE < 0.05m 且旋转 < 5°」中，RMSE 按项目既有口径解释
+  为**平移误差**（Open3D 的 `inlier_rmse` 实测 0.009–0.02m，恒小于 0.05m，不具判别力；
+  早期基线文档中的「RMSE」同为位移误差含义）。旋转角误差 = |R_est 与 R_gt 夹角|，
+  平移误差 = ‖t_est − t_gt‖₂。
+
+**报告格式（所有配准对比必须遵守）**：
+
+- 每组至少 **3 次重复**，报告 **N 次重复 + 中位数 + min/max + 四分位范围（IQR）**；
+  成功率 = 成功对数 / 总对数，中位数取 3 次重复的中位值，IQR = Q3 − Q1
+  （`numpy.percentile(..., [25, 50, 75])`）；
+- 同时按间隔分组报告 iv5 / iv10 / iv30 的成功率（取中位那次重复的逐对结果）；
+- 严禁单次结果下结论（Open3D RANSAC 无固定随机种子，单次排序无统计意义，见 §1.5）。
+
+---
+
 ## 1. 实验总览表
 
 | 实验编号 | 日期 | 配置 | 阶段 | mAP@0.25 | mAP@0.5 | 参数量 | 推理速度 | 备注 |
@@ -89,8 +109,6 @@ Git 提交   ：（如使用版本管理，记录 commit hash）
 4. FPFH 半径三档差异小，0.25 为稳健中间值。
 
 **写入 configs/default.yaml 的取值**（精度优先，兼顾真实数据稳健性）：`voxel_size=0.02`、`fpfh_radius=0.25`、`ransac_max_iteration=300000`（§1.1 建议 200k+；若 V100 上耗时敏感可回落 100000，见 default.yaml 注释）。
-
-
 
 ---
 
@@ -278,6 +296,97 @@ mutual_filter: false
 - 唯一可用增量：normal_check 使 iv10 从 29%→43%（总成功率持平 50%）——若应用
   场景以间隔 ≤10 为主，可考虑在最优组合上叠加法向一致性检查。
 
+### 1.11 需求基线 + 逐项消融（2026-09-23，补做任务）
+
+**背景**：此前报告的「基线 27%」实为半调优版本（60 对 / mutual_filter=True /
+FPFH=0.25 / voxel=0.02），从未跑过需求文档的原始参数组合。本节约 25 分钟完成
+**需求基线（需求文档原始参数）**与**逐项消融（证明每项调参贡献）**，全部
+20 对 × 3 次重复。复现命令：
+
+```bash
+# 需求基线
+python scripts/sweep_real_registration.py --pairs results/preprocess/pairs/pairs_real20.json \
+  --pcd_dir results/preprocess/pcd_real --pose_gt_dir results/preprocess/pose_gt_real20 \
+  --param voxel_size --values 0.02 --fixed_fpfh 0.25 --fixed_ransac 100000 \
+  --mutual_filter 0 --repeats 3 --out_dir results/registration/sweep_real/req_baseline
+# 消融四组（参数见下表，把 --values / --fixed_* 换成对应组合即可）
+```
+
+**① 需求基线（需求文档原始参数：voxel=0.02 / FPFH=0.25 / RANSAC=100k / mf=False）**
+
+| 指标 | 值 |
+| --- | --- |
+| 3 次重复成功率 | 25% / 15% / 25% |
+| **中位成功率（IQR）** | **25%（Q1=20 / Q3=25，IQR=5pp）** |
+| 按间隔（中位重复） | iv5=4/7、iv10=0/7、iv30=1/6 |
+| 平均 RMSE | 0.0128m |
+| 平均耗时 | 6.90s/对 |
+
+> **结论：需求基线中位 25%，低于此前报告的 27%（半调优版本）**。中位重复下
+> iv10=0/7（三次重复成功率仅 25% / 15% / 25%，iv10 帧对在原始参数下几乎全灭），
+> 用户指出的「基线口径」问题属实。
+
+**② 逐项消融（固定 mf=False，每组 3 次重复，20 对）**
+
+| 组合 | 参数（voxel / FPFH / RANSAC） | 中位成功率 | min–max | IQR | iv5 | iv10 | iv30 | 平均耗时 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 基线（需求原始） | 0.02 / 0.25 / 100k | 25% | 15–25% | 5pp | 4/7 | 0/7 | 1/6 | 6.90s |
+| 只调 FPFH | 0.02 / 0.40 / 100k | 30% | 15–35% | 10pp | 4/7 | 1/7 | 1/6 | 6.88s |
+| 只调 RANSAC | 0.02 / 0.25 / 500k | 25% | 20–40% | 10pp | 1/7 | 2/7 | 2/6 | 9.16s |
+| 只调 voxel | 0.03 / 0.25 / 100k | 40% | 40–60% | 10pp | 5/7 | 1/7 | 2/6 | 3.88s |
+| 全调优（锁定最优） | 0.03 / 0.40 / 500k | 50% | 50–65% | 7.5pp | 5/7 | 3/7 | 2/6 | 6.91s |
+
+**逐项贡献分析**：
+
+- **voxel 0.02→0.03 贡献最大**（+15pp，25%→40%），且耗时更低（6.90s→3.88s）：
+  0.02m 体素产生过多细碎点，FPFH 邻域统计被噪声淹没、RANSAC 对应搜索也更慢；
+  0.03m 兼顾特征稳定与计算量；
+- **FPFH 0.25→0.40 有独立贡献**（+5pp，25%→30%）：更大半径得到更平滑、更稳定的
+  描述子（机理见 docs/registration_failure_analysis.md §4.1）；
+- **RANSAC 100k→500k 单独无贡献**（25%→25%），但**与 FPFH=0.40 协同有效**：
+  全调优对比「只调 voxel」时 iv10 从 1/7→3/7、总成功率 40%→50%——特征质量足够
+  时更多迭代才转化为更多正确假设被采样到；特征差时迭代数再多也救不回来；
+- 三项合计 +25pp（25%→50%），与 §1.6–§1.8 分维度扫描结论一致。
+
+> 注意：3 次重复的统计功效不足，相邻组合（如 25% vs 30%）差异不显著；此处
+> 结论以中位趋势 + IQR 范围为判断依据，不做显著性断言。
+
+### 1.12 需求 4.2 对比基线补跑：改进ICP vs 传统ICP vs FGR（2026-09-23）
+
+**背景**：需求文档 4.2 明确「对比基线为传统点到点 ICP 和 FGR」。早期任务四的 FGR
+在非需求参数下、且无「纯点到点 ICP（无粗配准）」基线 → 新写
+`scripts/compare_registration_baselines.py` 在需求基线参数
+（voxel=0.02 / FPFH=0.25 / RANSAC=100k，组 A 直接复用 §1.11）下补跑三组，
+组 B/组 C 各 3 次重复（组 B 纯 ICP 为确定性算法，重复结果应一致）。
+复现命令：
+
+```bash
+python scripts/compare_registration_baselines.py \
+  --pairs results/preprocess/pairs/pairs_real20.json \
+  --pcd_dir results/preprocess/pcd_real --pose_gt_dir results/preprocess/pose_gt_real20 \
+  --voxel 0.02 --fpfh 0.25 --ransac 100000 --ransac_th 0.03 \
+  --repeats 3 --out_dir results/registration/sweep_real/baselines_compare
+```
+
+| 方法 | 中位成功率 | min/max | iv5 | iv10 | iv30 | 平均旋转° | 平均平移 m | 平均耗时 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 组A RANSAC→改进ICP（需求基线） | 25% | 15–25% | 4/7 | 0/7 | 1/6 | 8.60 | 0.379 | 6.90s |
+| **组B 纯点到点ICP（无粗配准）** | **35%** | **35%×3** | 3/7 | **4/7** | 0/6 | 5.04 | 0.110 | 0.80s |
+| 组C FGR→改进ICP | 25% | 25%×3 | 3/7 | 1/7 | 0/6 | 1.85 | 0.144 | 10.36s |
+
+**反直觉但重要的结论（粗配准的双刃剑）**：
+
+- **需求基线参数下，纯点到点 ICP（35%）反而高于 RANSAC→改进ICP（25%）**：
+  原始参数 RANSAC 在 iv10 几乎全错（iv10=0/7 vs 纯ICP 4/7）——近距离帧对
+  （位姿差数度/数厘米）本就在 ICP 收敛域内，此时错误的粗配准初值是**负资产**；
+- **粗配准的真正价值区间是 iv30**：纯 ICP 在 iv30 0/6，RANSAC→改进ICP 1/6，
+  全调优 2/6（见 §1.11）——视点基线越大，粗配准越必要；
+- **改进 ICP 的优势需正确粗配准初始化才能体现**：全调优 50% 全面超过
+  纯ICP 35% / FGR 25% / 需求基线 25%（iv10 修回 3/7、iv30 2/6）——
+  「特征质量（FPFH=0.40）+ 足够迭代（500k）+ 合适体素（0.03）」三者缺一不可；
+- **最终对比口径建议**：论文/报告用「全调优 50% vs 纯点到点ICP 35% vs FGR 25%」，
+  并说明近距离场景粗配准是双刃剑（纯 ICP 更快且不差）、大基线场景粗配准是刚需。
+
 ## 2. 单条实验详细记录模板
 
 ```markdown
@@ -335,7 +444,9 @@ python detection/evaluate_detection.py --config configs/ablation/xx.yaml \
 1. **最终参数组合**（已锁定至 `configs/default.yaml` → `registration`）：
    `voxel=0.03 / FPFH=0.40 / RANSAC=500k / mutual_filter=False`；
 2. **最终成功率**：真实 SUN3D（20 对 × 3 次重复中位）**50%**（iv5 86% / iv10 29% /
-   iv30 33%），相对基线 27% 提升 **23 个百分点**；
+   iv30 33%）；基线口径以 **§1.11 需求基线（原始参数 0.02/0.25/100k，中位 25%）**
+   计，提升 **25 个百分点**；早期报告的「基线 27%」为 60 对半调优版本
+   （mutual_filter=True），已由 §1.11 严格复测修正（需求基线实为 25%，iv10 全灭）；
 3. **瓶颈判断**：低重叠（间隔 30）平移错配是**结构性难题**——阈值敏感性分析证实
    iv30 对任何阈值不变；FGR / 法向一致性检查 / 多尺度三种鲁棒方法均未突破；
    经典特征方法在 50% 附近已达极限；
@@ -355,6 +466,10 @@ python detection/evaluate_detection.py --config configs/ablation/xx.yaml \
   `scripts/analyze_failures.py`、`scripts/render_failure_cases.py`；
 - 原始数据：`results/registration/sweep_real/{fpfh_r3,ransac,voxel,robust}/`
   （各组合 sweep_results.csv / per_pair_results.csv / 日志）；
+- 补做基线/消融：`results/registration/sweep_real/{req_baseline,ablation_only_fpfh,
+  ablation_only_ransac,ablation_only_voxel,ablation_full}/`（§1.11）；重叠率分析：
+  `scripts/overlap_analysis.py` → `results/figures/overlap_vs_success.png`、
+  `results/figures/overlap_analysis.json`、`overlap_by_interval.csv`；
 - 分析产物：`results/figures/{failure_*,threshold_sensitivity}.png`、
   `results/failure_cases/*.png`、`results/figures/failure_analysis.json`。
 
