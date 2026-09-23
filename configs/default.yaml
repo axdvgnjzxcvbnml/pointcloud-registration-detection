@@ -76,23 +76,39 @@ preprocess:
   vote_radius: 0.1              # 投票向量采样半径（米）
 
 # ---------- 3. 点云配准参数（纯 CPU） ----------
+# ============================================================
+# 【最终锁定值·真实 SUN3D 最优组合（2026-09-23，任务一+二+三扫描结论）】
+#   20 对真实数据（mit_studyroom，间隔 5/10/30）3 次重复取中位：
+#   - 中位成功率 50%（iv5 86% / iv10 29% / iv30 33%），相对基线 27% 提升 23 个百分点；
+#   - 扫描过程与结论见 docs/experiment_log.md §1.5–§1.8、
+#     docs/registration_failure_analysis.md。
+#   任务四（FGR / 法向量检查 / 多尺度）均未突破 iv30 瓶颈，不再探索传统方法，
+#   见 experiment_log §1.10。
+# ============================================================
 registration:
   # 点云预处理
-  voxel_size: 0.02              # 体素下采样尺寸（米）
+  voxel_size: 0.03              # 体素下采样尺寸（米）——扫描最优：0.03 中位 50%，
+                                #   快于 0.02（45%）且更稳；0.01 反而最差（10%）
   nb_neighbors: 20              # 统计离群点去除的 K 近邻
   std_ratio: 2.0                # 离群点去除标准差倍数
   normal_radius: 0.1            # 法向量估计搜索半径（米）
 
-  # 粗配准：FPFH + RANSAC
-  # （2026-09-22 超参扫描结论，见 docs/experiment_log.md §1.2：
-  #   模拟数据 27 组组合成功率均 100%；voxel=0.02 精度最优（rot≤0.019°），
-  #   voxel=0.08 最快（约 1/3 耗时）但精度差约 4 倍；RANSAC 100k↔500k 在
-  #   易数据上无差异。真实数据（mit_studyroom）失败集中在低内点率帧对，
-  #   §1.1 建议迭代 200k+，故此处取 300000；耗时敏感可回落 100000。）
-  fpfh_radius: 0.25             # FPFH 特征描述子搜索半径（米）
-  ransac_max_iteration: 300000  # RANSAC 迭代次数（扫描最优区间 100k~500k，取稳健值）
-  ransac_distance_threshold: 0.03   # 距离阈值 = 1.5 × voxel_size
+  # 粗配准：FPFH + RANSAC（任务一+二最优组合）
+  fpfh_radius: 0.40             # FPFH 特征搜索半径（米）——扫描最优（0.35 iv30 最好但波动大，弃用）
+  ransac_max_iteration: 500000  # RANSAC 迭代次数——扫描最优（100k 仅 20%，500k 达 45%）
+  ransac_distance_threshold: 0.045  # 距离阈值 = 1.5 × voxel_size（0.03）
   ransac_confidence: 0.999      # RANSAC 置信度
+  mutual_filter: false          # 对应点互滤波——扫描结论：False + 500k 最优（45%），
+                                #   True 会滤掉低重叠场景的正确对应（30–35%）
+
+  # 可选：法向量一致性检查（iv10 增益模式）
+  #   normal_checker: null         # 默认关闭（追求整体鲁棒性）
+  #   normal_checker: 30           # 启用 30° 法向约束：iv10 成功率 29%→43%，
+  #                                #   但 iv30 从 33% 降到 17%（低重叠下法向量
+  #                                #   因视点差夹角大被误滤）。应用场景以间隔 ≤10
+  #                                #   为主时建议启用（见 experiment_log §1.10）。
+  normal_checker: null
+  normal_checker_threshold_deg: 30
 
   # 精配准：改进 ICP（点到平面 + 自适应阈值 + 早停）
   icp_max_iteration: 50
@@ -101,7 +117,7 @@ registration:
   icp_threshold_factor: 0.5     # 每次迭代阈值 = max(0.02, 0.5 × 上次 RMSE)
   icp_early_stop_fitness: 1e-6  # 相对 fitness 变化 < 1e-6 时早停
 
-  # 评测
+  # 评测（固定口径：旋转 5° + 平移 0.05m，敏感性分析见 §2.2）
   eval_rmse_threshold: 0.05         # 配准成功判定：对齐后 RMSE 阈值（米）
   eval_rotation_threshold: 5.0      # 旋转角误差阈值（度）
   eval_translation_threshold: 0.05  # 平移误差阈值（米）
