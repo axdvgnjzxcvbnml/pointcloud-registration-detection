@@ -96,10 +96,18 @@ python registration/evaluate_registration.py \
     --pairs results/preprocess/pairs/pairs.json \
     --pcd_dir results/preprocess/pcd \
     --pose_gt_dir results/preprocess/pose_gt \
-    --out_dir results/registration/eval
+    --out_dir results/registration/eval \
+    --config configs/default.yaml
 ```
 
+- **参数已锁定**：使用 `configs/default.yaml` → `registration` 节的最优组合
+  （voxel 0.03 / FPFH 0.40 / RANSAC 500k / mutual_filter=False），**无需再调参**——
+  来自真实 SUN3D 数据 20 对 × 3 次重复扫描（`docs/experiment_log.md` §1.5–§1.8）。
 - **预期**：输出 4 方法（coarse / fgr / improved_icp / point2point_icp）的成功率、RMSE、旋转角误差、平移误差；写入 `results/registration/eval/summary.json` 与 `detail.csv`。数值回填 `docs/experiment_log.md` 配准表 REG-001~003。
+- **预期结果（本地实测，V100 应接近）**：最优组合中位成功率约 **50%**（iv5 86% / iv10 29% / iv30 33%）；**iv5 最高、iv30 最低**（低重叠结构性难题，见 `docs/registration_failure_analysis.md`）。
+- **V100 结果差异排查**：若 V100 上结果与本地差异 >10 个百分点，优先检查——
+  ① 数据加载（帧对/点云路径、`depth_scale` 单位）；② 真值方向约定（T_AB 为 B→A，
+  评测端已取逆）；③ Open3D 版本差异（本地 0.19，V100 建议 0.17.0+）。
 - **失败**：所有方法成功率 0 → 检查真值方向约定（`compute_pose_gt` 的 T_AB 为 B→A，评测端已取逆）与帧对文件；单方法异常 → 查看该方法对应模块日志（`registration/coarse_registration.py` / `fine_registration.py`）。
 
 ## 7. VoteNet 基线
